@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Majid Ershadi</title>
+<meta name="description" content="Personal page." />
+<meta name="referrer" content="no-referrer" />
+<style>
+  :root{
+    --bg:#14161a;
+    --surface:#1b1e24;
+    --text:#e8e4db;
+    --muted:#8a8f99;
+    --hair:rgba(255,255,255,.09);
+    --accent:#c9a86a;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --serif:Georgia,"Times New Roman",serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    line-height:1.6;
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:7vh 24px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .card{
+    width:100%;
+    max-width:520px;
+  }
+  .eyebrow{
+    font-family:var(--mono);
+    font-size:.72rem;
+    letter-spacing:.22em;
+    text-transform:uppercase;
+    color:var(--muted);
+    margin:0 0 18px;
+  }
+  .name{
+    font-family:var(--serif);
+    font-weight:400;
+    font-size:clamp(2.4rem,8vw,3.6rem);
+    line-height:1.05;
+    letter-spacing:-.01em;
+    margin:0 0 26px;
+  }
+  .name .dot{color:var(--accent);}
+  .intro{
+    font-size:1.02rem;
+    color:var(--text);
+    margin:0 0 36px;
+    max-width:46ch;
+  }
+  .rule{
+    height:1px;
+    background:var(--hair);
+    border:0;
+    margin:0 0 22px;
+  }
+  .rec-label{
+    font-family:var(--mono);
+    font-size:.68rem;
+    letter-spacing:.2em;
+    text-transform:uppercase;
+    color:var(--accent);
+    margin:0 0 14px;
+  }
+  .rec{
+    display:grid;
+    grid-template-columns:88px 1fr;
+    gap:8px 18px;
+    font-size:.95rem;
+    margin:0 0 30px;
+  }
+  .rec dt{
+    font-family:var(--mono);
+    font-size:.78rem;
+    letter-spacing:.04em;
+    color:var(--muted);
+    padding-top:2px;
+  }
+  .rec dd{margin:0;color:var(--text);}
+  .links{
+    display:flex;
+    flex-wrap:wrap;
+    gap:10px 26px;
+    margin:0 0 40px;
+  }
+  .links a{
+    color:var(--text);
+    text-decoration:none;
+    font-size:.95rem;
+    border-bottom:1px solid var(--accent);
+    padding-bottom:2px;
+    transition:color .18s ease,border-color .18s ease;
+  }
+  .links a:hover,.links a:focus-visible{color:var(--accent);}
+  a:focus-visible,.links a:focus-visible{
+    outline:2px solid var(--accent);
+    outline-offset:4px;
+    border-radius:2px;
+  }
+  .foot{
+    font-family:var(--mono);
+    font-size:.66rem;
+    letter-spacing:.18em;
+    text-transform:uppercase;
+    color:var(--muted);
+    margin:0;
+  }
+  /* load sequence */
+  .reveal{opacity:0;transform:translateY(10px);animation:rise .7s ease forwards;}
+  .reveal:nth-child(1){animation-delay:.05s;}
+  .reveal:nth-child(2){animation-delay:.14s;}
+  .reveal:nth-child(3){animation-delay:.23s;}
+  .reveal:nth-child(4){animation-delay:.32s;}
+  .reveal:nth-child(5){animation-delay:.41s;}
+  .reveal:nth-child(6){animation-delay:.50s;}
+  .reveal:nth-child(7){animation-delay:.59s;}
+  @keyframes rise{to{opacity:1;transform:none;}}
+  @media (prefers-reduced-motion:reduce){
+    .reveal{animation:none;opacity:1;transform:none;}
+  }
+  @media (max-width:420px){
+    .rec{grid-template-columns:74px 1fr;}
+  }
+</style>
+</head>
+<body>
+  <main class="card">
+    <p class="eyebrow reveal">Security Architect</p>
+    <h1 class="name reveal">Majid Ershadi<span class="dot">.</span></h1>
+    <p class="intro reveal">I work in security architecture, designing systems and understanding how they break. The specifics live in conversations, not on this page.</p>
+
+    <hr class="rule reveal" />
+
+    <div class="reveal">
+      <p class="rec-label">Record</p>
+      <dl class="rec">
+        <dt>role</dt><dd>security architect</dd>
+        <dt>focus</dt><dd>how systems are built, and how they fail</dd>
+        <dt>clients</dt><dd>not listed, by habit</dd>
+        <dt>based</dt><dd>remote or on-site</dd>
+      </dl>
+    </div>
+
+    <nav class="links reveal" aria-label="Contact">
+      <a href="mailto:majjid.khayatershadii@gmail.com">Email</a>
+      <a href="https://www.linkedin.com/in/majid-k-74a322b7" rel="noopener noreferrer">LinkedIn</a>
+    </nav>
+
+    <p class="foot reveal">Minimal by design</p>
+  </main>
+</body>
+</html>
