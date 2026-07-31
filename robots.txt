@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://majidershadi.github.io/sitemap.xml

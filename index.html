@@ -133,8 +133,56 @@
     .rec{grid-template-columns:74px 1fr;}
   }
 </style>
+<style id="article-tabs-style">
+  .article-tabs{
+    position:fixed;
+    top:18px;
+    right:24px;
+    z-index:1000;
+    display:flex;
+    gap:6px;
+    padding:5px;
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:999px;
+    background:rgba(27,30,36,.92);
+    backdrop-filter:blur(10px);
+    box-shadow:0 8px 30px rgba(0,0,0,.20);
+  }
+  .article-tabs a{
+    display:inline-block;
+    padding:6px 10px;
+    border:1px solid transparent;
+    border-radius:999px;
+    color:var(--muted,#9aa0aa);
+    font-family:var(--mono,ui-monospace,"SF Mono",Menlo,Consolas,monospace);
+    font-size:.70rem;
+    line-height:1;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    text-decoration:none;
+  }
+  .article-tabs a:hover,
+  .article-tabs a:focus-visible,
+  .article-tabs a[aria-current="page"]{
+    color:var(--text,#e8e4db);
+    border-color:rgba(255,255,255,.10);
+    background:#20242b;
+  }
+  .article-tabs a:focus-visible{
+    outline:2px solid var(--accent,#c9a86a);
+    outline-offset:3px;
+  }
+  @media (max-width:520px){
+    .article-tabs{top:12px;right:12px;}
+    .article-tabs a{padding:6px 8px;font-size:.64rem;}
+  }
+</style>
 </head>
 <body>
+<nav id="article-tabs" class="article-tabs" aria-label="Primary">
+  <a href="/" aria-current="page">Profile</a>
+  <a href="/articles/">Articles</a>
+</nav>
   <main class="card">
     <p class="eyebrow reveal">Security Architect</p>
     <h1 class="name reveal">Majid Ershadi<span class="dot">.</span></h1>
