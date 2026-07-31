@@ -1,0 +1,326 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Building Secure Splunk Apps in a Moving Ecosystem — Majid Ershadi</title>
+<meta name="description" content="A security-first journey from a UI-less Splunk SDK prototype to UCC, AppInspect, SSDLC, and the compatibility tax of Splunk application development." />
+<meta name="referrer" content="strict-origin-when-cross-origin" />
+<meta name="theme-color" content="#14161a" />
+<link rel="canonical" href="https://majidershadi.github.io/articles/building-secure-splunk-apps/" />
+<link rel="stylesheet" href="/assets/site.css" />
+<link rel="alternate" type="application/rss+xml" title="Majid Ershadi Articles" href="/articles/feed.xml" />
+<meta property="og:type" content="article" />
+<meta property="og:title" content="Building Secure Splunk Apps in a Moving Ecosystem — Majid Ershadi" />
+<meta property="og:description" content="A security-first journey from a UI-less Splunk SDK prototype to UCC, AppInspect, SSDLC, and the compatibility tax of Splunk application development." />
+<meta property="og:url" content="https://majidershadi.github.io/articles/building-secure-splunk-apps/" />
+<meta property="og:image" content="https://majidershadi.github.io/assets/og-building-secure-splunk-apps.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta property="article:published_time" content="2026-08-01" /><meta property="article:author" content="Majid Ershadi" /><script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "Building Secure Splunk Apps in a Moving Ecosystem", "description": "A security-first journey from a UI-less Splunk SDK prototype to UCC, AppInspect, SSDLC, and the compatibility tax of Splunk application development.", "author": {"@type": "Person", "name": "Majid Ershadi", "url": "https://majidershadi.github.io/"}, "datePublished": "2026-08-01", "dateModified": "2026-08-01", "mainEntityOfPage": "https://majidershadi.github.io/articles/building-secure-splunk-apps/", "image": "https://majidershadi.github.io/assets/og-building-secure-splunk-apps.png"}</script></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-shell">
+<nav class="site-nav" aria-label="Primary">
+  <a class="site-brand" href="/">Majid Ershadi<span class="dot">.</span></a>
+  <ul class="site-tabs">
+    <li><a href="/" >Profile</a></li>
+    <li><a href="/articles/" aria-current="page">Articles</a></li>
+  </ul>
+</nav>
+</header>
+<main id="main" class="page-main"><div class="article-layout"><article class="article"><header class="article-header"><p class="kicker">Security Architecture · Splunk · SSDLC</p><h1 class="article-title">Building Secure Splunk Apps in a Moving Ecosystem</h1><p class="article-deck">My journey from a UI-less Splunk SDK integration to UCC, AppInspect, and compatibility engineering.</p><div class="meta"><time datetime="2026-08-01">Published August 1, 2026</time><span>Last technically verified July 31, 2026</span><span>By Majid Ershadi</span></div></header><div class="article-body">
+
+<blockquote>
+<p><strong>Scope and date.</strong> This article describes my first-hand development experience with MISPFuse and REST Profiler for Splunk. Product behavior and compatibility requirements are tied to the versions identified here and may change. <strong>Last technically verified: July 31, 2026.</strong></p>
+</blockquote>
+<p>I did not begin this journey by choosing a framework.</p>
+<p>I began with a security problem.</p>
+<p>I wanted to move selected Splunk search results into MISP in a controlled, repeatable, and auditable way. That idea became <strong>MISPFuse</strong>, but the first version was not a polished application with a configuration page. It was a direct Splunk SDK prototype: a custom search command, a small amount of configuration, and just enough code to prove that the workflow was possible.</p>
+<p>At first, the difficult questions were not about a user interface. They were questions such as:</p>
+<ul>
+<li>Which Splunk data should be permitted to leave the platform?</li>
+<li>Who should be authorized to send it?</li>
+<li>Which MISP destination should receive it?</li>
+<li>How should API credentials be stored and rotated?</li>
+<li>How should field mappings be validated?</li>
+<li>How could the integration avoid becoming an unrestricted data-export channel?</li>
+<li>What should be logged, and what should never appear in a log?</li>
+<li>What should happen after a timeout or partial failure?</li>
+</ul>
+<p>That was my first major lesson:</p>
+<blockquote>
+<p>Building a Splunk application is not simply Python development. It is security architecture inside a privileged and evolving platform.</p>
+</blockquote>
+<p>I am sharing this journey because I still consider Splunk a strong product, and because frameworks such as the Universal Configuration Console—UCC—are important steps toward a more consistent and trustworthy application ecosystem. My criticism is not that Splunk should stop modernizing. It is that the platform, framework, dependencies, and validation policy need a clearer compatibility contract.</p>
+<h2 id="mispfuse-started-as-a-direct-sdk-prototype">MISPFuse started as a direct SDK prototype</h2>
+<p>The public <a href="https://github.com/majidershadi/mispfuse/blob/main/docs/EVOLUTION.md">MISPFuse engineering history</a> preserves three stages rather than rewriting the past to make the final design look inevitable.</p>
+<p>The first stage used a direct Splunk <code>StreamingCommand</code>. Each result row became a MISP event and attribute. That was effective as a proof of concept because it had almost no supporting infrastructure.</p>
+<p>It also exposed the risks of a prototype becoming an application too quickly. The historical design included:</p>
+<ul>
+<li>a MISP URL and key in a Python file;</li>
+<li>disabled TLS verification;</li>
+<li>fixed organization and tag values;</li>
+<li>IP-oriented type handling;</li>
+<li>one event per result row;</li>
+<li>published events by default;</li>
+<li>no alert action or configuration UI;</li>
+<li>a copied Python environment containing compiled files, native extensions, executables, and duplicated libraries.</li>
+</ul>
+<p>Those limitations are valuable to document. They show the difference between <strong>making a workflow possible</strong> and <strong>making software safe to distribute</strong>.</p>
+<p>The prototype answered one question: could Splunk send selected results to MISP?</p>
+<p>It did not yet answer the harder questions: could the application protect credentials, constrain destinations, survive upgrades, work consistently across deployments, or pass a release-assurance process?</p>
+<h2 id="the-security-architecture-behind-the-feature">The security architecture behind the feature</h2>
+<p>MISPFuse crosses several trust boundaries:</p>
+<pre><code class="language-text">Splunk user or scheduled search
+            ↓
+Splunk search results
+            ↓
+MISPFuse command or alert action
+            ↓
+Application configuration and stored credentials
+            ↓
+Outbound HTTPS connection
+            ↓
+MISP server
+</code></pre>
+<p>Each transition carries a different risk.</p>
+<p>Splunk results may contain sensitive security, infrastructure, business, or personal data. A user can be authorized to search that data without automatically being authorized to export it. A configured URL becomes a server-side network destination. An API key must be retrievable at runtime without being exposed through configuration files, error messages, or logs. Mapping rules influence not only formatting but the integrity and distribution of threat intelligence.</p>
+<p>The relevant threat actors are not limited to anonymous external attackers. They include:</p>
+<ul>
+<li>an authenticated user with insufficient export authority;</li>
+<li>a user placing malicious or oversized values into search results;</li>
+<li>an administrator making an unsafe configuration choice;</li>
+<li>a compromised or malicious destination;</li>
+<li>an attacker attempting server-side request forgery;</li>
+<li>a compromised dependency, repository, or CI workflow;</li>
+<li>and the application developer’s own incorrect assumptions.</li>
+</ul>
+<p>The assets include search results, API keys, proxy credentials, mapping templates, configuration, release artifacts, audit records, and the availability of both Splunk and MISP.</p>
+<p>This leads to several architecture principles.</p>
+<h3>The backend is the security boundary</h3>
+<p>A UI can improve usability, but hiding a button is not authorization. Administrative REST handlers, custom commands, and alert actions must enforce their own authorization and validation.</p>
+<p>Splunk’s guidance on <a href="https://dev.splunk.com/enterprise/docs/devtools/customsearchcommands/securityresponsibilities">custom search command security responsibilities</a> is important here: custom commands execute inside the Splunk platform context, so result fields and command arguments cannot be treated as harmless client input.</p>
+<h3>Deny unsafe behavior by default</h3>
+<p>Unknown destinations, unsupported schemes, malformed mappings, invalid credentials, and failed certificate checks should fail closed. A laboratory compatibility mode may be necessary, but it should be explicit, restricted, and visible in logs.</p>
+<h3>Protect the complete secret lifecycle</h3>
+<p>The current MISPFuse design uses Splunk encrypted credential storage and documents that it is reversible secret storage—not a one-way password hash. Administrators with sufficient platform or operating-system privilege may still access the value. The correct operational pattern is therefore a dedicated, least-privileged MISP automation key with rotation after a suspected host compromise. See the project’s <a href="https://github.com/majidershadi/mispfuse/blob/main/SECURITY.md">security policy</a>.</p>
+<h3>Constrain outbound requests</h3>
+<p>A server-side HTTP client needs more than URL syntax validation. A mature destination policy should consider HTTPS requirements, embedded credentials, redirects, query strings, loopback and link-local addresses, cloud metadata endpoints, private ranges, IPv6 equivalents, DNS rebinding, proxy behavior, and approved ports. Application controls should complement network egress policy rather than replace it.</p>
+<h3>Bound resource use</h3>
+<p>A custom command or alert action can process a large result set. Timeouts, response-size limits, retry bounds, concurrency controls, row limits, and cancellation behavior are security controls because availability is part of security.</p>
+<h3>Plan for retry integrity</h3>
+<p>Retries can create duplicate MISP events when the request succeeds but the response is lost. A production design should define its delivery model and use correlation identifiers, existing-event checks, deterministic identifiers, or another idempotency strategy where the API permits it.</p>
+<h2 id="from-a-script-to-a-real-splunk-application">From a script to a real Splunk application</h2>
+<p>The second MISPFuse stage introduced UCC. This was not the beginning of the project; it was the point where the prototype needed to become operable and maintainable.</p>
+<p>UCC generated the configuration page, REST handlers, alert-action scaffolding, and command integration. The API key moved into Splunk encrypted credential storage. Accounts became selectable. Proxy and logging settings became manageable. Field-to-MISP mappings moved from hard-coded logic into reusable templates. The command and alert action shared the same push logic.</p>
+<p>The current public <a href="https://github.com/majidershadi/mispfuse">MISPFuse README</a> documents additional hardening in the third stage:</p>
+<ul>
+<li>connection validation before saving an account;</li>
+<li>TLS certificate validation enabled by default;</li>
+<li>redaction of API keys and proxy credentials from connection errors;</li>
+<li>an 8 MiB response limit;</li>
+<li>disabled HTTP redirects and automatic decompression;</li>
+<li>exact-version, SHA-256 hash-locked runtime dependencies;</li>
+<li>rejection of native files such as <code>.so</code>, <code>.pyd</code>, <code>.dll</code>, and <code>.dylib</code> during release checks;</li>
+<li>no publisher telemetry.</li>
+</ul>
+<p>The full application also replaced the broad PyMISP dependency tree with a small client for the specific MISP endpoints it needed. That reduced the runtime and supply-chain surface.</p>
+<p>This evolution demonstrates why secure development is a process, not a feature added at the end.</p>
+<h2 id="why-ucc-matters-to-the-splunk-ecosystem">Why UCC matters to the Splunk ecosystem</h2>
+<p>UCC saved development time, but its larger value is standardization.</p>
+<p>Without a common framework, each developer may independently implement configuration pages, credential storage, validation, REST endpoints, permissions, proxy handling, logging, packaging, and cluster behavior. Some implementations will be strong. Others will be incomplete, inconsistent, difficult to review, or unsafe.</p>
+<p>The result can be an ecosystem of useful but scattered plugins with unrelated security and operational models.</p>
+<p>UCC can raise the baseline by encouraging:</p>
+<ul>
+<li>familiar configuration experiences;</li>
+<li>supported credential handling;</li>
+<li>predictable REST and metadata structures;</li>
+<li>reusable validators;</li>
+<li>standard packaging;</li>
+<li>common fixes that can benefit many applications.</li>
+</ul>
+<p>This improves the ecosystem for developers, reviewers, administrators, and users. It can reduce duplicated mistakes and make applications easier to understand and support.</p>
+<p>UCC does not guarantee that an application is secure. It cannot decide whether a user is authorized to export data, whether a destination is organizationally approved, or whether a mapping violates data-sharing policy. Threat modeling, authorization design, secure coding, negative testing, and operational monitoring remain application responsibilities.</p>
+<p>But UCC is still a major step forward.</p>
+<h2 id="the-central-risk-of-generated-frameworks">The central risk of generated frameworks</h2>
+<p>My two applications exposed the central trade-off of code generation:</p>
+<blockquote>
+<p>You own the application, but you do not fully control the generated package.</p>
+</blockquote>
+<p>As the author, I remain responsible for everything distributed in the archive. Yet UCC produces significant parts of it, including UI bootstrap files, JavaScript bundles, REST handlers, metadata, configuration files, and runtime dependencies.</p>
+<p>This creates an ownership imbalance. I am accountable for the generated result, but I cannot independently control UCC’s architecture, release schedule, transitive dependencies, output layout, or response to a new AppInspect policy.</p>
+<p>Generated code must therefore be treated as a software-supply-chain dependency, not as a transparent build convenience.</p>
+<p>This does not argue against UCC. The same standardization that creates dependency risk also reduces ecosystem fragmentation. It does mean that UCC releases should be continuously tested against current Splunk Enterprise deprecations, supported Python runtimes, AppInspect versions, Cloud vetting policy, and runtime libraries.</p>
+<h2 id="rest-profiler-and-the-shared-appinspect-blocker">REST Profiler and the shared AppInspect blocker</h2>
+<p>REST Profiler began from a later point in my learning. It needed reusable REST profiles, authentication settings, proxy support, retries, result formatting, a custom command, an alert action, and encrypted secrets. Using UCC earlier was a reasonable choice.</p>
+<p>The release process then exposed a mismatch between current generator output and current validation policy.</p>
+<p>As of July 31, 2026:</p>
+<ul>
+<li>UCC 6.5.3 was the latest published UCC release, dated July 24, 2026.</li>
+<li>AppInspect 4.3.0 was the validator used for both applications.</li>
+<li>UCC’s 6.3.0 changelog stated that Mako and CherryPy had been removed and legacy templates migrated to static HTML.</li>
+<li>UCC’s own pull request explained that <code>base.html</code> had been rewritten as plain HTML, with app-specific values injected during the build.</li>
+<li>UCC 6.5.3 still carried that file under <code>appserver/templates/base.html</code>.</li>
+</ul>
+<p>The relevant official sources are the <a href="https://github.com/splunk/addonfactory-ucc-generator/releases/tag/v6.5.3">UCC 6.5.3 release</a>, the <a href="https://splunk.github.io/addonfactory-ucc-generator/CHANGELOG/">UCC changelog</a>, the <a href="https://github.com/splunk/addonfactory-ucc-generator/pull/1998">Mako and CherryPy removal pull request</a>, and the <a href="https://raw.githubusercontent.com/splunk/addonfactory-ucc-generator/v6.5.3/splunk_add_on_ucc_framework/package/appserver/templates/base.html">6.5.3 base template</a>.</p>
+<p>REST Profiler’s public <a href="https://github.com/majidershadi/rest_profiler/blob/main/APPINSPECT_MAKO_ESCALATION.md">escalation note</a> records the result:</p>
+<pre><code class="language-text">check_for_custom_mako_templates
+appserver/templates/base.html
+future_failure
+</code></pre>
+<p>The generated Configuration and Dashboard views referenced that loader directly, so deleting it without changing the generated view architecture would break the pages.</p>
+<p>MISPFuse was then inspected with AppInspect 4.3.0 and produced the same future failure. Its report summary was:</p>
+<pre><code class="language-text">Errors:           0
+Failures:         0
+Future failures:  1
+Warnings:         8
+Successes:      117
+</code></pre>
+<p>The separate check for Python code blocks inside a Mako template passed, while the path-based custom-template check returned the future failure. A sanitized summary is available on the <a href="../../evidence/appinspect-ucc-compatibility/">evidence page</a>.</p>
+<p>AppInspect’s <a href="https://dev.splunk.com/enterprise/reference/appinspect/appinspectcliref">CLI reference</a> defines exit code <code>104</code> in CI mode for future failures.</p>
+<p>The contradiction was therefore practical, not rhetorical:</p>
+<pre><code class="language-text">UCC generated the file.
+The generated UI depended on the file.
+The file was static rather than executable Mako.
+AppInspect classified the path as a future failure.
+Deleting it risked breaking the application.
+Keeping it blocked a strict release gate.
+</code></pre>
+<p>The correct engineering response was not to suppress the finding or delete a file blindly. It was to preserve the package and report, block release, document the reproduction, and ask for a supported remediation.</p>
+<h2 id="the-compatibility-tax-of-splunk-development">The compatibility tax of Splunk development</h2>
+<p>I now describe the recurring work across these projects as a <strong>compatibility tax</strong>: the effort required to keep application logic aligned with several independently evolving layers.</p>
+<h3>Python</h3>
+<p>Splunk Enterprise 10.4 makes Python 3.13 the default interpreter, with Python 3.9 as fallback during the transition. A developer must test not only their own code but direct and transitive dependencies, generated handlers, runtime declarations, and architecture-specific packages.</p>
+<p>“Python 3 compatible” is not a useful release claim. A support statement should identify exact runtime versions and evidence.</p>
+<h3>KV Store and MongoDB</h3>
+<p>Splunk Enterprise 10.4 upgrades KV Store and KV Service to MongoDB 8.0 and removes unsupported MongoDB 4 through 6 binaries. Splunk documents that some older deployments need an intermediate upgrade because direct movement from older MongoDB versions to 8.0 is unsupported. It also changes how some KV Store TLS fields are evaluated.</p>
+<p>These changes are reasonable lifecycle work, but an application using KV Store inherits part of that lifecycle. Availability behavior, backup, restore, migration, cluster consistency, and rollback become application concerns.</p>
+<p>The official platform changes are documented in the <a href="https://help.splunk.com/en/splunk-enterprise/release-notes-and-updates/release-notes">Splunk Enterprise 10.4 release notes</a>.</p>
+<h3>Generator and runtime libraries</h3>
+<p>Pinning UCC alone does not define a reproducible build. UCC applications also depend on <code>splunktaucclib</code>, <code>solnlib</code>, the Splunk SDK, HTTP libraries, validators, and front-end packages. REST Profiler initially resolved an incompatible <code>splunktaucclib</code> version and stopped before AppInspect.</p>
+<p>The release manifest must record the resolved graph, not only direct requirements.</p>
+<h3>AppInspect policy</h3>
+<p>A package can remain unchanged while its result changes because the AppInspect CLI, check set, future tags, or trusted-library definitions changed. Compatibility is therefore a relationship between the source, generated package, dependency set, validator version, selected tags, and policy at evaluation time.</p>
+<p>That makes release evidence essential.</p>
+<h2 id="secure-software-development-lessons">Secure software development lessons</h2>
+<p>The journey became much clearer when I mapped it to established SSDLC models.</p>
+<p><a href="https://csrc.nist.gov/pubs/sp/800/218/final">NIST SSDF</a> describes secure practices that can be integrated into any SDLC. <a href="https://owaspsamm.org/model/">OWASP SAMM</a> organizes software security across governance, design, implementation, verification, and operations. <a href="https://owasp.org/www-project-application-security-verification-standard/">OWASP ASVS</a> provides a basis for testable technical security requirements.</p>
+<p>For a Splunk application, I would now use the following roadmap.</p>
+<h3>1. Governance and scope</h3>
+<p>Define the product owner, security owner, release authority, supported Splunk versions, Python runtimes, deployment topologies, Cloud status, FIPS status, data-classification assumptions, vulnerability-response process, and end-of-support policy.</p>
+<p>Write security requirements with identifiers and trace them to implementation and tests. Examples:</p>
+<pre><code class="language-text">SEC-AUTH-001: Only authorized roles may execute an outbound push.
+SEC-NET-002: Destinations must satisfy the approved egress policy.
+SEC-LOG-003: API keys and authorization headers must never be logged.
+SEC-BUILD-004: The published package must be the package inspected by AppInspect.
+</code></pre>
+<h3>2. Threat modeling and architecture</h3>
+<p>Document data flows, trust boundaries, secrets, network destinations, persistent state, deployment topology, failure behavior, and upgrade behavior.</p>
+<p>Model abuse of legitimate features, not only classic injection attacks. For MISPFuse, “an authorized search user exports data to an unauthorized MISP” is a business-logic abuse case even when every input is syntactically valid.</p>
+<p>Keep core application logic separate from UCC handlers and UI code. Framework adapters should be thin and replaceable.</p>
+<h3>3. Secure implementation</h3>
+<p>Centralize authorization, secret access, HTTP behavior, destination validation, retries, error normalization, and logging. Duplicated security logic becomes inconsistent security logic.</p>
+<p>Use explicit timeouts, bounded inputs, secure temporary files, safe encoding, and deny-by-default validation. Never build shell commands or arbitrary paths from search results.</p>
+<h3>4. Supply-chain security</h3>
+<p>Generated code and third-party packages are part of the product. Use exact dependency constraints, hashes, software composition analysis, license review, native-binary detection, an SBOM, reproducible builds where practical, artifact checksums, and provenance.</p>
+<p>Record at least:</p>
+<pre><code class="language-text">Application version
+Git commit and tag
+Build timestamp and operating system
+Python version
+UCC version
+AppInspect version
+Resolved dependencies
+SBOM
+Package SHA-256
+AppInspect report SHA-256
+</code></pre>
+<h3>5. CI/CD security</h3>
+<p>Protect branches and tags, require peer review, minimize workflow permissions, isolate build workers, avoid exposing release secrets to pull requests, and pin actions or tools to reviewed versions.</p>
+<p>Build the package once. Verify, inspect, checksum, sign, and publish that exact artifact. Rebuilding after AppInspect passes defeats the assurance chain.</p>
+<h3>6. Verification</h3>
+<p>Use requirements-driven testing:</p>
+<ul>
+<li>unit tests for validators, redaction, authorization, retry, mapping, and idempotency;</li>
+<li>negative tests for malicious values, oversized records, forbidden destinations, redirects, invalid certificates, missing permissions, and partial failures;</li>
+<li>static analysis, secret scanning, dependency analysis, and configuration validation;</li>
+<li>API authorization and error-leakage testing;</li>
+<li>fuzzing or property tests for URL and mapping parsers;</li>
+<li>integration testing against controlled Splunk and MISP instances;</li>
+<li>topology tests for standalone, clustered, Cloud, restricted-egress, and FIPS environments when claimed;</li>
+<li>installation, upgrade, rollback, and uninstall tests;</li>
+<li>performance and resilience testing under slow or unavailable dependencies.</li>
+</ul>
+<p>AppInspect is mandatory, but it is one assurance layer. Static validation cannot decide whether a user is organizationally authorized to disclose a field or whether a retry violates business semantics.</p>
+<h3>7. Release and deployment</h3>
+<p>Block release on test failures, AppInspect errors and failures, unapproved future failures, reachable high-severity dependency vulnerabilities, missing SBOM or provenance, version inconsistency, or artifact mismatch.</p>
+<p>Document required roles, egress, certificates, supported versions, topology, upgrade procedure, backup, rollback limitations, known risks, and post-install checks.</p>
+<h3>8. Operations and incident response</h3>
+<p>Log security-relevant actions without sensitive payloads: configuration changes, credential replacement, destination, initiating user or saved-search owner, row counts, MISP identifiers, retries, authorization failures, and TLS exceptions.</p>
+<p>Monitor unusual destinations, volume spikes, repeated authentication failures, repeated TLS bypass, and unexpected scheduled executions.</p>
+<p>Publish a <code>SECURITY.md</code>, supported-version policy, private reporting method, and emergency disable procedure. Be able to identify affected releases, rotate credentials, and issue a safe update.</p>
+<h3>9. Retirement</h3>
+<p>Decommissioning should revoke external keys, remove stored credentials, disable scheduled searches, document retention effects, publish end-of-support dates, and provide migration guidance. Abandoned apps with valid credentials and scheduled jobs remain a security risk.</p>
+<h2 id="what-i-would-like-splunk-to-improve">What I would like Splunk to improve</h2>
+<p>My recommendations are constructive because I want the ecosystem to succeed.</p>
+<h3>Publish a unified compatibility matrix</h3>
+<p>A maintained matrix should connect Splunk Enterprise and Cloud releases with Python, UCC, <code>splunktaucclib</code>, <code>solnlib</code>, Splunk SDK, AppInspect, front-end frameworks, and KV Store/MongoDB versions.</p>
+<h3>Cross-test UCC and AppInspect releases</h3>
+<p>Every UCC release should generate a representative reference app and run it through the current Cloud AppInspect checks. The report should be published with the release.</p>
+<h3>Version validation policy visibly</h3>
+<p>Reports should identify the CLI, check set, trusted-library dataset, Cloud policy, selected tags, and evaluation date.</p>
+<h3>Identify finding ownership</h3>
+<p>A report should help distinguish application-owned findings from generator-owned, dependency-owned, platform-generated, and informational findings.</p>
+<h3>Provide migration paths before enforcement</h3>
+<p>When a generated pattern becomes a future failure, developers need a supported replacement, working reference, known-good framework version, CI example, timeline, and exception process.</p>
+<h3>Publish secure reference pipelines</h3>
+<p>Official examples should cover UCC builds, dependency locking, SBOM generation, AppInspect, checksums, provenance, signing, and Splunkbase preparation.</p>
+<h2 id="why-i-remain-positive-about-splunk">Why I remain positive about Splunk</h2>
+<p>It would be easy for an article about compatibility failures to sound hostile. That is not my conclusion.</p>
+<p>Splunk remains a powerful platform with mature search, APIs, custom commands, alert actions, Cloud distribution, KV Store, AppInspect, UCC, and a large technical community.</p>
+<p>Many changes that created work for me were necessary. Unsupported Python and MongoDB versions must be retired. TLS standards must improve. Legacy Mako and CherryPy behavior should be removed. Cloud applications require stronger validation. The ecosystem needs standard frameworks.</p>
+<p>UCC is therefore part of the solution. It can reduce fragmented implementations and make professional application development more accessible to independent developers and small teams.</p>
+<p>AppInspect is also valuable. It forced improvements in packaging, dependency handling, runtime declarations, release evidence, and CI behavior.</p>
+<p>The correct response is not to weaken those controls. It is to make the platform, generator, dependencies, and validator evolve as one coherent developer system.</p>
+<h2 id="final-reflection">Final reflection</h2>
+<p>MISPFuse began as a small, UI-less integration built directly with the Splunk SDK. The security problem came first. UCC came later because the application needed maintainable configuration, encrypted credentials, validation, and a better administrative experience.</p>
+<p>REST Profiler benefited from those lessons and adopted UCC much earlier. Both applications then reached the same AppInspect 4.3.0 compatibility boundary through a UCC-generated file.</p>
+<p>That journey changed my understanding of Splunk application development.</p>
+<p>A developer is not only building a feature. The developer is managing a contract between business logic, user authorization, data governance, the Splunk SDK, generated code, Python, dependencies, database backends, front-end frameworks, AppInspect, Cloud policy, CI/CD, and operational support.</p>
+<p>My central lessons are:</p>
+<blockquote>
+<p>Start with the problem and its trust boundaries, not with the framework.</p>
+</blockquote>
+<blockquote>
+<p>Build security into the backend before adding convenience through a UI.</p>
+</blockquote>
+<blockquote>
+<p>Use standard frameworks where they reduce fragmentation and improve consistency.</p>
+</blockquote>
+<blockquote>
+<p>Treat generated code and dependencies as part of the software supply chain.</p>
+</blockquote>
+<blockquote>
+<p>Never confuse a successful build with a secure, compatible, and approved release.</p>
+</blockquote>
+<blockquote>
+<p>Preserve evidence when official tools disagree.</p>
+</blockquote>
+<blockquote>
+<p>Treat compatibility, upgrades, vulnerability response, and retirement as product features from the first commit.</p>
+</blockquote>
+<p>I am sharing this journey not to discourage developers from building for Splunk, but to help them begin with clearer expectations and a stronger security foundation.</p>
+<h2 id="references-and-evidence">References and evidence</h2>
+<ul>
+<li><a href="https://github.com/majidershadi/mispfuse">MISPFuse repository and current security controls</a></li>
+<li><a href="https://github.com/majidershadi/mispfuse/blob/main/docs/EVOLUTION.md">MISPFuse engineering evolution</a></li>
+<li><a href="https://github.com/majidershadi/mispfuse/blob/main/SECURITY.md">MISPFuse security policy</a></li>
+<li><a href="https://github.com/majidershadi/rest_profiler">REST Profiler repository</a></li>
+<li><a href="https://github.com/majidershadi/rest_profiler/blob/main/APPINSPECT_MAKO_ESCALATION.md">REST Profiler AppInspect escalation note</a></li>
+<li><a href="https://github.com/splunk/addonfactory-ucc-generator/releases/tag/v6.5.3">UCC 6.5.3 release</a></li>
+<li><a href="https://splunk.github.io/addonfactory-ucc-generator/CHANGELOG/">UCC changelog</a></li>
+<li><a href="https://github.com/splunk/addonfactory-ucc-generator/pull/1998">UCC Mako and CherryPy removal pull request</a></li>
+<li><a href="https://raw.githubusercontent.com/splunk/addonfactory-ucc-generator/v6.5.3/splunk_add_on_ucc_framework/package/appserver/templates/base.html">UCC 6.5.3 base template</a></li>
+<li><a href="https://dev.splunk.com/enterprise/reference/appinspect/appinspectcliref">Splunk AppInspect CLI reference</a></li>
+<li><a href="https://help.splunk.com/en/splunk-enterprise/release-notes-and-updates/release-notes">Splunk Enterprise 10.4 release notes</a></li>
+<li><a href="https://csrc.nist.gov/pubs/sp/800/218/final">NIST Secure Software Development Framework</a></li>
+<li><a href="https://owaspsamm.org/model/">OWASP SAMM</a></li>
+<li><a href="https://owasp.org/www-project-application-security-verification-standard/">OWASP ASVS</a></li>
+</ul>
+</div></article><aside class="toc" aria-label="Table of contents"><h2>Contents</h2><ol><li><a href="#mispfuse-started-as-a-direct-sdk-prototype">MISPFuse started as a direct SDK prototype</a></li><li><a href="#the-security-architecture-behind-the-feature">The security architecture behind the feature</a></li><li><a href="#from-a-script-to-a-real-splunk-application">From a script to a real Splunk application</a></li><li><a href="#why-ucc-matters-to-the-splunk-ecosystem">Why UCC matters to the Splunk ecosystem</a></li><li><a href="#the-central-risk-of-generated-frameworks">The central risk of generated frameworks</a></li><li><a href="#rest-profiler-and-the-shared-appinspect-blocker">REST Profiler and the shared AppInspect blocker</a></li><li><a href="#the-compatibility-tax-of-splunk-development">The compatibility tax of Splunk development</a></li><li><a href="#secure-software-development-lessons">Secure software development lessons</a></li><li><a href="#what-i-would-like-splunk-to-improve">What I would like Splunk to improve</a></li><li><a href="#why-i-remain-positive-about-splunk">Why I remain positive about Splunk</a></li><li><a href="#final-reflection">Final reflection</a></li><li><a href="#references-and-evidence">References and evidence</a></li></ol></aside></div></main><footer class="site-footer"><div class="site-shell"><span>Majid Ershadi · Security architecture and application security</span><span>Minimal by design</span></div></footer></body></html>

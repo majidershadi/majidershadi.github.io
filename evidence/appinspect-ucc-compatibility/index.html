@@ -1,0 +1,28 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UCC and AppInspect compatibility evidence — Majid Ershadi</title>
+<meta name="description" content="Sanitized evidence for the UCC 6.5.3 and AppInspect 4.3.0 template compatibility finding reproduced by MISPFuse and REST Profiler." />
+<meta name="referrer" content="strict-origin-when-cross-origin" />
+<meta name="theme-color" content="#14161a" />
+<link rel="canonical" href="https://majidershadi.github.io/evidence/appinspect-ucc-compatibility/" />
+<link rel="stylesheet" href="/assets/site.css" />
+<link rel="alternate" type="application/rss+xml" title="Majid Ershadi Articles" href="/articles/feed.xml" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="UCC and AppInspect compatibility evidence — Majid Ershadi" />
+<meta property="og:description" content="Sanitized evidence for the UCC 6.5.3 and AppInspect 4.3.0 template compatibility finding reproduced by MISPFuse and REST Profiler." />
+<meta property="og:url" content="https://majidershadi.github.io/evidence/appinspect-ucc-compatibility/" />
+<meta property="og:image" content="https://majidershadi.github.io/assets/og-building-secure-splunk-apps.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta name="twitter:card" content="summary_large_image" />
+</head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-shell">
+<nav class="site-nav" aria-label="Primary">
+  <a class="site-brand" href="/">Majid Ershadi<span class="dot">.</span></a>
+  <ul class="site-tabs">
+    <li><a href="/" >Profile</a></li>
+    <li><a href="/articles/" aria-current="page">Articles</a></li>
+  </ul>
+</nav>
+</header><main id="main" class="page-main"><header class="page-header"><p class="kicker">Sanitized evidence</p><h1 class="page-title">UCC 6.5.3 and AppInspect 4.3.0</h1><p class="page-deck">A concise record of the compatibility finding discussed in the article. This page intentionally does not publish raw reports, credentials, CI environments, or internal deployment data.</p></header><div class="notice"><strong>Scope:</strong> These results establish the same finding for two specific applications and versions. They do not prove that every UCC application is affected.</div><section class="evidence-grid"><div class="evidence-box"><h2>MISPFuse 2.1.0</h2><dl class="metric-list"><dt>AppInspect</dt><dd>4.3.0</dd><dt>Errors</dt><dd>0</dd><dt>Failures</dt><dd>0</dd><dt>Future failures</dt><dd>1</dd><dt>Warnings</dt><dd>8</dd><dt>Successes</dt><dd>117</dd></dl></div><div class="evidence-box"><h2>REST Profiler 1.0.1</h2><dl class="metric-list"><dt>UCC</dt><dd>6.5.3</dd><dt>AppInspect</dt><dd>4.3.0</dd><dt>Native CI exit</dt><dd>104</dd><dt>Future-failure path</dt><dd>base.html</dd></dl></div></section><section class="article-body"><h2 id="finding">Shared finding</h2><pre><code>check_for_custom_mako_templates
+appserver/templates/base.html
+future_failure</code></pre><p>In the MISPFuse report, <code>check_for_existence_of_python_code_block_in_mako_template</code> returned success while the path-based custom-template check returned the future failure.</p><h2 id="framework-context">Framework context</h2><p>UCC 6.3.0 documented removal of Mako and CherryPy and migration of legacy templates to static HTML. UCC 6.5.3 still includes a build template under <code>package/appserver/templates/base.html</code>.</p><h2 id="evidence-links">Evidence links</h2><ul><li><a href="https://github.com/majidershadi/rest_profiler/blob/main/APPINSPECT_MAKO_ESCALATION.md">REST Profiler escalation and reproduction note</a></li><li><a href="https://github.com/majidershadi/mispfuse">MISPFuse repository</a></li><li><a href="https://splunk.github.io/addonfactory-ucc-generator/CHANGELOG/">UCC changelog</a></li><li><a href="https://github.com/splunk/addonfactory-ucc-generator/pull/1998">UCC Mako/CherryPy removal PR</a></li><li><a href="https://raw.githubusercontent.com/splunk/addonfactory-ucc-generator/v6.5.3/splunk_add_on_ucc_framework/package/appserver/templates/base.html">UCC 6.5.3 base template</a></li><li><a href="https://dev.splunk.com/enterprise/reference/appinspect/appinspectcliref">AppInspect CLI exit-code reference</a></li></ul><h2 id="integrity">Local report integrity</h2><p>SHA-256 of the MISPFuse AppInspect JSON supplied for this review:</p><pre><code>56500461c93992bcaa277cbc6826ffcb06786e22d6e8d0944c00077c91c092ff</code></pre><p>The raw report should be preserved with release artifacts. Publish it only after a separate privacy, licensing, and third-party metadata review.</p></section></main><footer class="site-footer"><div class="site-shell"><span>Majid Ershadi · Security architecture and application security</span><span>Minimal by design</span></div></footer></body></html>
