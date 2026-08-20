@@ -1,0 +1,439 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SmartPath DNS: Engineering an Adaptive Local Resolver for Unreliable Networks — Majid Ershadi</title>
+<meta name="description" content="A detailed engineering tour of SmartPath DNS: multi-protocol resolver racing, adaptive priority, persistent caching, GEO selection, bounded concurrency, optional Ghosting, and secure local operations." />
+<meta name="referrer" content="strict-origin-when-cross-origin" />
+<meta name="theme-color" content="#14161a" />
+<link rel="canonical" href="https://majidershadi.github.io/articles/smartpath-dns/" />
+<link rel="stylesheet" href="/assets/site.css" />
+<link rel="alternate" type="application/rss+xml" title="Majid Ershadi Articles" href="/articles/feed.xml" />
+<meta property="og:type" content="article" />
+<meta property="og:title" content="SmartPath DNS: Engineering an Adaptive Local Resolver for Unreliable Networks — Majid Ershadi" />
+<meta property="og:description" content="Inside the architecture of an adaptive local DNS control plane that learns the best path across UDP, TCP, DoT, and DoH while remaining observable and bounded." />
+<meta property="og:url" content="https://majidershadi.github.io/articles/smartpath-dns/" />
+<meta name="twitter:card" content="summary" />
+<meta property="article:published_time" content="2026-08-20" />
+<meta property="article:author" content="Majid Ershadi" />
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"SmartPath DNS: Engineering an Adaptive Local Resolver for Unreliable Networks","description":"A detailed engineering tour of SmartPath DNS: multi-protocol resolver racing, adaptive priority, persistent caching, GEO selection, bounded concurrency, optional Ghosting, and secure local operations.","author":{"@type":"Person","name":"Majid Ershadi","url":"https://majidershadi.github.io/"},"datePublished":"2026-08-20","dateModified":"2026-08-20","mainEntityOfPage":"https://majidershadi.github.io/articles/smartpath-dns/","about":["Domain Name System","DNS-over-HTTPS","DNS-over-TLS","Resilient systems","Network security"]}</script>
+</head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-shell">
+<nav class="site-nav" aria-label="Primary">
+  <a class="site-brand" href="/">Majid Ershadi<span class="dot">.</span></a>
+  <ul class="site-tabs">
+    <li><a href="/">Profile</a></li>
+    <li><a href="/articles/" aria-current="page">Articles</a></li>
+  </ul>
+</nav>
+</header>
+<main id="main" class="page-main"><div class="article-layout"><article class="article"><header class="article-header">
+<p class="kicker">DNS Engineering · Resilience · Network Security</p>
+<h1 class="article-title">SmartPath DNS: Engineering an Adaptive Local Resolver for Unreliable Networks</h1>
+<p class="article-deck">How I designed a local DNS control plane that races multiple resolver paths, learns from real traffic, preserves useful answers, and keeps every expensive feature bounded and optional.</p>
+<div class="meta"><time datetime="2026-08-20">Published August 20, 2026</time><span>Last technically verified August 20, 2026</span><span>By Majid Ershadi</span></div>
+</header><div class="article-body">
+
+<blockquote>
+<p><strong>Scope and date.</strong> This article documents the SmartPath DNS architecture and implemented behavior as of August 20, 2026. Ghosting is an optional feature and is disabled by default. The project is a forwarding resolver and local control plane; it is not an authoritative DNS server and does not recursively walk the public DNS root hierarchy.</p>
+</blockquote>
+
+<p>I started SmartPath DNS because changing a laptop or router from one public resolver to another should not be the operational response to an unstable internet path.</p>
+
+<p>On a healthy network, resolver choice can look trivial. Configure one familiar address—perhaps Cloudflare, Google, Quad9, Control D, or an ISP resolver—and forget about it. On an inconsistent network, that assumption breaks. A resolver may be reachable over classic UDP but unreliable over TLS. A DNS-over-HTTPS endpoint may succeed while port 53 is degraded. One provider may answer quickly for a period and then become the slowest path. Two resolvers may return different address sets for the same name because they see different CDN topology. An ISP may interfere with, redirect, throttle, or simply mishandle one protocol while another continues to work.</p>
+
+<p>The practical problem was not “which public DNS provider is universally fastest?” There is no permanent answer to that question. The problem was:</p>
+
+<blockquote>
+<p>How can a local resolver continuously choose the best available path for this network, for this moment, without hiding its decisions or consuming unlimited resources?</p>
+</blockquote>
+
+<p>SmartPath DNS is my answer. It is written as a fast Go service with a persistent SQLite/WAL state layer and a hands-on web control plane. It accepts ordinary DNS over UDP and TCP on the local machine, forwards queries through a configurable collection of classic DNS, DNS-over-TLS, and DNS-over-HTTPS upstreams, and learns from the observed latency and reliability of every path.</p>
+
+<h2 id="design-goals-and-explicit-non-goals">Design goals and explicit non-goals</h2>
+
+<p>The design began with a set of concrete goals.</p>
+
+<ul>
+<li><strong>Survive partial network failure.</strong> Losing one provider or protocol must not immediately break local name resolution.</li>
+<li><strong>Make selection adaptive.</strong> Resolver ordering should reflect measured behavior, not a static opinion embedded in configuration.</li>
+<li><strong>Keep the common path fast.</strong> Cache hits must remain local and expensive comparison features must be bounded.</li>
+<li><strong>Support encrypted and classic transports.</strong> UDP, TCP, DoT, and DoH are independent network paths and should be usable together.</li>
+<li><strong>Preserve learning across restarts.</strong> Container recreation must not erase cache records, weights, profiles, settings, or telemetry.</li>
+<li><strong>Expose the decision process.</strong> A local infrastructure service should show its upstreams, waves, latency, cache, failures, and current limits.</li>
+<li><strong>Default to safe optional behavior.</strong> GEO lookups, HTTP endpoint probes, external intelligence services, and Ghosting all create additional traffic and must require deliberate activation.</li>
+<li><strong>Bound resources.</strong> Concurrency, candidate count, timeouts, database size, history retention, and background discovery must all have user-controlled limits.</li>
+</ul>
+
+<p>There are also deliberate non-goals. SmartPath does not replace authoritative DNS, DNSSEC validation policy at a validating resolver, enterprise split-horizon architecture, or a dedicated filtering product. It does not promise that the first answer is always semantically superior. It does not assume geolocation is truth. It does not make an unstable network stable; it makes local DNS resolution more resilient to instability in individual paths.</p>
+
+<h2 id="architecture-a-small-data-plane-and-an-observable-control-plane">Architecture: a small data plane and an observable control plane</h2>
+
+<p>The system separates the DNS data plane from its control and persistence surfaces:</p>
+
+<pre><code class="language-text">Operating system, browser, or local application
+                       │
+                 UDP / TCP :53
+                       │
+              SmartPath DNS engine
+              ┌────────┴────────┐
+              │                 │
+       memory hot cache   resolver scheduler
+              │                 │
+          SQLite/WAL       high-priority wave
+              │                 │
+ settings, telemetry,      UDP · TCP · DoT · DoH
+ weights, cache, jobs            │
+              │            optional low wave
+              │                 │
+              └──── answer selection ────┐
+                                         │
+                                   local response
+
+Web dashboard ── versioned local API ── engine state
+</code></pre>
+
+<p>The Go engine owns authoritative application state. The browser is not the source of truth. Settings, learned upstream measurements, cache records, query telemetry, profiles, Ghosting jobs, and discovered names are stored in SQLite. The dashboard reads and changes those records through a versioned local API. This means closing the browser does not pause learning, and restarting a container does not reset the system.</p>
+
+<p>Hot cache entries also live in memory. SQLite is consulted when the process has restarted or the memory layer misses. This hybrid design avoids a disk query for every common cache hit while retaining durable state.</p>
+
+<h2 id="the-complete-query-lifecycle">The complete query lifecycle</h2>
+
+<p>A normal query passes through a deliberately ordered pipeline.</p>
+
+<h3>1. Validate and normalize</h3>
+
+<p>The current engine accepts one DNS question per request. The cache key normalizes the fully qualified name and includes record type, class, and the DNSSEC OK bit. Including the DO state avoids incorrectly serving an ordinary cached response where the client requested DNSSEC-related data.</p>
+
+<h3>2. Check the local cache</h3>
+
+<p>The memory cache is checked first. A fresh match is copied, its TTLs are aged, the original request ID and question are restored, and the answer is returned immediately. If memory misses, SQLite can restore a persisted answer. Cache hits never need to enter an upstream race.</p>
+
+<h3>3. Build priority waves</h3>
+
+<p>Enabled upstreams are partitioned into a high-priority first wave and a low-priority fallback wave. Privacy mode excludes unencrypted UDP and TCP upstreams. SmartPath protects a configurable minimum high-priority population—five by default—so learning cannot gradually demote every useful racer into the fallback set.</p>
+
+<h3>4. Race the first wave</h3>
+
+<p>First-wave upstreams are launched concurrently, subject to the global parallel-task ceiling. Each exchange shares the query’s total timeout. This is important: concurrency control is not permission to let queued work live forever. If a task waits too long for a slot, the original DNS deadline still wins.</p>
+
+<h3>5. Hedge with a second wave</h3>
+
+<p>A timer controls the low-priority hedge. If no valid first-wave result arrives before the configured delay, the second wave joins. If the first wave already produced a usable answer, unnecessary low-priority work remains suppressed. The fallback wave is therefore available for resilience without becoming a mandatory cost for every query.</p>
+
+<h3>6. Decide how much evidence is enough</h3>
+
+<p>First-response and privacy profiles return the first valid response. Smart and GEO modes open a short decision window after the first usable answer so alternatives can be compared. A valid terminal result is either <code>NOERROR</code> or <code>NXDOMAIN</code>; an empty successful answer can be meaningful and is not automatically treated as transport failure.</p>
+
+<h3>7. Select, learn, cache, and respond</h3>
+
+<p>The fastest accepted upstream receives a win and a weight increment. Smart selection may reorder address records after endpoint or GEO comparison. The final message keeps the client’s ID and original question, enters memory and persistent cache, is logged according to the configured privacy setting, and is returned.</p>
+
+<h2 id="four-upstream-transports-one-common-result-model">Four upstream transports, one common result model</h2>
+
+<p>SmartPath treats each configured protocol endpoint as an independent path, even when several paths belong to the same provider.</p>
+
+<table>
+<thead><tr><th>Transport</th><th>Implementation concern</th><th>Why it matters</th></tr></thead>
+<tbody>
+<tr><td>DNS over UDP</td><td>Low overhead, port 53, possible fragmentation or interference</td><td>Often the fastest path, but commonly affected by restrictive networks</td></tr>
+<tr><td>DNS over TCP</td><td>Connection setup and stream framing</td><td>Useful when UDP is unavailable or responses are large</td></tr>
+<tr><td>DNS-over-TLS</td><td>TLS 1.2+, certificate and server-name validation, usually port 853</td><td>Provides an encrypted DNS channel with explicit DNS semantics</td></tr>
+<tr><td>DNS-over-HTTPS</td><td>RFC 8484 DNS wire messages over HTTPS, HTTP status and body limits</td><td>Can survive networks where dedicated DNS ports are degraded</td></tr>
+</tbody>
+</table>
+
+<p>The built-in configuration provides twelve paths across Cloudflare, Google, Quad9, AdGuard, Mullvad, and Control D Unfiltered. Control D is represented by both of its unfiltered legacy IPv4 addresses, its DoH endpoint, and its DoT bootstrap path with the correct TLS name. Presets are ordinary records after seeding: users can test, disable, move, edit, add, and remove endpoints. A deliberately deleted preset is not silently recreated on every restart.</p>
+
+<p>DoH is sent as DNS wire format rather than a provider-specific JSON shortcut. DoT and DoH validate TLS identities. Transport failures are recorded separately from valid DNS response codes so a name that genuinely does not exist does not damage a resolver’s reliability score.</p>
+
+<h2 id="learning-without-destroying-fallback-capacity">Learning without destroying fallback capacity</h2>
+
+<p>Adaptive systems become dangerous when “learning” is an opaque label for uncontrolled state changes. SmartPath uses intentionally understandable signals.</p>
+
+<p>Each attempted upstream records latency, query count, failure count, last-seen time, wins, and a learned weight. Average latency is an exponentially weighted moving average: new measurements influence the score without completely replacing history. A winning path gains weight; a non-winning attempt decays slightly. Reliability is calculated from successful and failed attempts.</p>
+
+<p>Periodic rebalancing compares sufficiently sampled upstreams. A resolver can move to the low-priority wave when its average latency is far above the learned group average by the configured demotion factor. Rebalancing refuses to violate the minimum high-priority count. This creates a crucial invariant:</p>
+
+<blockquote>
+<p>Learning may change preference, but it may not learn the system into having no first wave.</p>
+</blockquote>
+
+<p>The dashboard exposes every component of this process: observed latency, reliability, queries, failures, wins, weight, score, enabled state, and assigned wave. An operator can reset learning, force rebalancing, test one upstream directly, or move it manually.</p>
+
+<h2 id="when-dns-answers-are-not-equivalent">When DNS answers are not equivalent</h2>
+
+<p>Different resolvers can legitimately return different address sets. CDN mapping, anycast topology, ECS behavior, cache age, and provider policy can all influence the result. SmartPath supports two optional comparison mechanisms.</p>
+
+<h3>HTTP or HTTPS endpoint probing</h3>
+
+<p>When enabled, SmartPath extracts unique A and AAAA candidates and probes the configured path using the original hostname. Preserving the hostname and TLS server name matters because connecting to an address without the intended virtual host can measure the wrong service or fail certificate validation. The probe is bounded by its own timeout. The fastest one or two addresses—configurable by the user—are retained while CNAME and other non-address records remain intact.</p>
+
+<p>This feature is disabled in profiles where its extra outbound traffic or latency is undesirable.</p>
+
+<h3>GEO consensus</h3>
+
+<p>GEO-aware mode can ask several editable location providers about the local resolver, an address, or a domain. Domain targets are first resolved to every A and AAAA address and then evaluated through enabled address providers; direct-domain sources can also participate. SmartPath chooses the country by provider consensus and averages coordinates among agreeing observations before ranking candidate addresses by distance.</p>
+
+<p>Geolocation is advisory, not an authorization decision. Sources can disagree, rate-limit, fail, or return approximate coordinates. The dashboard therefore shows each observation and its error rather than presenting a single country label as unquestionable truth. GEO lookup is disabled by default and successful consensus is cached for a configurable period.</p>
+
+<h2 id="persistent-cache-as-an-availability-layer">Persistent cache as an availability layer</h2>
+
+<p>The cache is not merely a speed optimization. On a network where upstream access intermittently disappears, a recent local answer can be the difference between a degraded session and a complete outage.</p>
+
+<p>SmartPath applies a configurable multiplier to upstream TTLs and constrains the result between minimum and maximum limits. Positive answers, negative answers, and stale eligibility are represented explicitly. Truncated responses are not cached. On an upstream failure, a stale entry may be served within the configured stale-on-error window.</p>
+
+<p>Every cached message stores:</p>
+
+<ul>
+<li>the normalized cache key and queried name;</li>
+<li>record type;</li>
+<li>packed DNS response bytes;</li>
+<li>fresh expiry and stale-until timestamps;</li>
+<li>original storage time and effective TTL;</li>
+<li>winning source; and</li>
+<li>local hit count.</li>
+</ul>
+
+<p>The hit count is operationally useful. It allows the storage manager to distinguish a frequently reused record from a cold record that was cached once and never requested again.</p>
+
+<h2 id="resource-guardrails-parallel-work-and-database-growth">Resource guardrails: parallel work and database growth</h2>
+
+<p>A resolver that races many providers can accidentally multiply work. Five upstreams times one query is reasonable. Five upstreams times hundreds of simultaneous client queries—plus background prefetching—can become a socket, CPU, memory, and bandwidth problem.</p>
+
+<p>SmartPath therefore has a live global parallel-task limiter. It bounds simultaneous upstream exchanges across ordinary client queries and Ghosting prefetches. The limiter can change while the process is running. Waiting tasks wake when the limit increases or another task releases a slot. The dashboard reports the active count, current ceiling, and observed peak.</p>
+
+<p>Storage is bounded as well. The operator chooses a database budget from 8 MB to 10 GB and a rotation target between 50 and 95 percent. When active SQLite data crosses the limit, maintenance performs this sequence:</p>
+
+<ol>
+<li>delete DNS cache records whose stale window has expired;</li>
+<li>measure active pages again;</li>
+<li>select cache rows ordered by lowest hit count and oldest storage time;</li>
+<li>delete bounded batches until active data reaches the target or no cache rows remain;</li>
+<li>checkpoint the WAL and request incremental vacuuming; and</li>
+<li>persist the rotation timestamp and cumulative number of cold records removed.</li>
+</ol>
+
+<p>New databases enable incremental vacuum mode. Older SQLite files may retain freed pages as allocated but reusable space. That is not lost capacity: SQLite consumes those pages before extending the file again. The dashboard distinguishes active data, allocated bytes, and reusable pages so “file size” is not confused with “live records.”</p>
+
+<p>Enforcement runs after settings changes, once per minute during maintenance, and on demand through the dashboard or API.</p>
+
+<h2 id="ghosting-is-an-optional-prefetch-feature">Ghosting is an optional prefetch feature</h2>
+
+<p>Ghosting explores a different question: can the resolver prepare likely related names before an application asks for them?</p>
+
+<p>It is deliberately implemented as a feature, not as a requirement of the DNS path. <strong>Ghosting is disabled by default.</strong> Enabling it is an explicit decision because it can generate additional DNS, HTTPS, and third-party API traffic. Manual runs are also explicit and visible.</p>
+
+<p>A Ghosting job can use four independently controlled waves:</p>
+
+<table>
+<thead><tr><th>Wave</th><th>Technique</th><th>Boundary</th></tr></thead>
+<tbody>
+<tr><td>DNS relations</td><td>Follow CNAME, MX, NS, SRV, SVCB, and HTTPS targets</td><td>Only names under the same registrable root are accepted</td></tr>
+<tr><td>Landing page</td><td>Fetch the root over HTTPS and inspect link, source, and form targets</td><td>Redirects remain in scope; private, loopback, and link-local destinations are blocked</td></tr>
+<tr><td>Passive intelligence</td><td>Certificate transparency and optional free or paid subdomain services</td><td>HTTPS-only provider URLs, bounded responses, timeouts, and environment-only secrets</td></tr>
+<tr><td>Dictionary</td><td>Try an editable set of labels such as <code>api</code>, <code>cdn</code>, or <code>auth</code></td><td>Disabled by default and constrained by candidate and concurrency limits</td></tr>
+</tbody>
+</table>
+
+<p>Presets include crt.sh, HackerTarget Host Search, Cert Spotter, VirusTotal, and SecurityTrails. Providers can be disabled individually. Paid API values are read from named environment variables and are never stored in the dashboard settings or SQLite database.</p>
+
+<p>Discovered names are resolved through the same SmartPath engine and placed into the normal persistent cache. Ghosting’s own queries are not counted as user traffic and cannot recursively start more Ghosting jobs. Jobs, warnings, discoveries, source, wave, answer count, latency, and cache-warm result are persisted. A running job can be stopped and its history can be cleared independently of the DNS cache.</p>
+
+<p>The feature has separate controls for maximum candidates, concurrent warmups, HTTP/API timeout, delay between waves, automatic refresh cooldown, record types, dictionary entries, and provider list. This is important because prefetching is useful only while it remains subordinate to real queries.</p>
+
+<h2 id="security-and-privacy-boundaries">Security and privacy boundaries</h2>
+
+<p>A local DNS control plane observes sensitive metadata and initiates network requests, so its security model cannot stop at transport encryption.</p>
+
+<h3>Local exposure</h3>
+
+<p>The supplied Docker configuration binds the dashboard, API, and DNS listener to loopback. Exposing the API beyond the local host requires an explicit configuration change. An optional API key protects non-health endpoints through the <code>X-SmartPath-Key</code> header. The dashboard should sit behind a local authenticated reverse proxy if the API key is enabled for browser use.</p>
+
+<h3>Secret handling</h3>
+
+<p>DoH and DoT server names are configuration, not secrets. Paid intelligence API keys are secrets and remain process-level environment values. Exports include settings and provider environment-variable names, not the secret values.</p>
+
+<h3>Outbound request safety</h3>
+
+<p>Landing-page Ghosting resolves destinations itself and accepts only public global-unicast addresses. It rejects private, loopback, and link-local targets and prevents redirects from leaving the registrable domain. Passive-intelligence endpoints must use HTTPS and use the same public-destination transport. Response bodies and request time are limited.</p>
+
+<h3>Query privacy</h3>
+
+<p>The privacy profile restricts forwarding to encrypted DoT and DoH paths and can redact domain names in new query-history rows. This does not make DNS activity invisible to the selected resolver or destination network. It narrows local logging and protects the forwarding channel; it is not anonymity.</p>
+
+<h3>Fail-closed validation</h3>
+
+<p>Settings are validated before persistence. Timeouts, sizes, concurrency, candidate count, TTL range, modes, provider templates, protocols, and DNS labels have explicit bounds. Invalid settings do not partially apply.</p>
+
+<h2 id="profiles-and-the-web-control-plane">Profiles and the web control plane</h2>
+
+<p>SmartPath includes predefined operating profiles because one set of tradeoffs does not fit every connection.</p>
+
+<ul>
+<li><strong>Balanced</strong> uses smart comparison with practical default limits.</li>
+<li><strong>First response</strong> minimizes the decision window and returns one address quickly.</li>
+<li><strong>Deep learning</strong> gathers more evidence and enables endpoint probing.</li>
+<li><strong>Privacy</strong> uses encrypted upstreams and redacted query history.</li>
+<li><strong>GEO aware</strong> enables location consensus and proximity preference.</li>
+</ul>
+
+<p>The dashboard is not a decorative status page. It provides:</p>
+
+<ul>
+<li>live latency, QPS, cache-hit rate, and recent query activity;</li>
+<li>high- and low-priority upstream tables with test, move, enable, and delete controls;</li>
+<li>cache search, individual removal, full clearing, and JSON export;</li>
+<li>profile activation and detailed resolution settings;</li>
+<li>editable GEO sources with a consensus tester;</li>
+<li>Ghosting configuration, live waves, jobs, discoveries, stop, and cleanup;</li>
+<li>parallel-task activity and database-budget telemetry; and</li>
+<li>pause, resume, rebalance, and learning-reset actions.</li>
+</ul>
+
+<p>The API is versioned under <code>/api/v1</code>. The dashboard uses a same-origin proxy to avoid exposing engine topology to client code. API and dashboard state are intentionally separate from the DNS packet listener so the resolver can continue serving while no browser is open.</p>
+
+<h2 id="deployment-on-windows-macos-and-linux">Deployment on Windows, macOS, and Linux</h2>
+
+<p>The engine and dashboard run either in Docker or through native Go and Node workflows. Docker Compose is the recommended local scenario on Windows.</p>
+
+<pre><code class="language-powershell">docker compose up --build -d
+
+# Supplied Windows-safe dashboard binding
+Start-Process "http://localhost:13000"
+
+# Verify containers
+docker compose ps
+</code></pre>
+
+<p>The named <code>smartpath-dns-data</code> volume stores SQLite data independently from container lifetime. A normal <code>docker compose down</code> preserves it. Deleting volumes is intentionally documented as a separate destructive choice.</p>
+
+<p>DNS binds to <code>127.0.0.1:53</code> in the supplied Compose configuration. The operating system can then use the local address as its resolver. Windows uses <code>Set-DnsClientServerAddress</code>; macOS can use <code>networksetup</code>; systemd-resolved systems can use <code>resolvectl</code>. Port 53 may already belong to another local stub, VPN client, security product, or container platform, so the owner should be identified before changing system DNS.</p>
+
+<p>Native development defaults to unprivileged port <code>10053</code>. Binding port 53 on Unix-like systems should use the narrowest available capability rather than running the entire service as root.</p>
+
+<h2 id="failure-scenarios-and-expected-behavior">Failure scenarios and expected behavior</h2>
+
+<table>
+<thead><tr><th>Failure</th><th>Expected SmartPath behavior</th></tr></thead>
+<tbody>
+<tr><td>One high-priority resolver times out</td><td>Other first-wave results remain eligible; failure updates only that path</td></tr>
+<tr><td>Entire first wave is silent</td><td>Low-priority upstreams launch after the hedge delay</td></tr>
+<tr><td>All upstreams fail</td><td>A stale cache entry can be served within policy; otherwise return SERVFAIL</td></tr>
+<tr><td>Resolver returns NXDOMAIN</td><td>Treat it as a valid terminal DNS response, not a transport failure</td></tr>
+<tr><td>DoT certificate is invalid</td><td>Reject the exchange and record a failure</td></tr>
+<tr><td>DoH endpoint returns non-success HTTP</td><td>Reject the exchange; do not interpret the body as a DNS message</td></tr>
+<tr><td>Concurrency ceiling is saturated</td><td>Wait for a slot only within the original DNS deadline</td></tr>
+<tr><td>Database exceeds its budget</td><td>Expire dead rows, rotate the coldest cache records, checkpoint, and preserve hot entries when possible</td></tr>
+<tr><td>GEO provider disagrees or fails</td><td>Expose the observation; use available consensus rather than hiding disagreement</td></tr>
+<tr><td>Ghosting provider times out</td><td>Record a warning and continue other enabled waves</td></tr>
+<tr><td>Container is recreated</td><td>Reload settings, learning, cache, jobs, and discoveries from the persistent volume</td></tr>
+</tbody>
+</table>
+
+<h2 id="verification-strategy">Verification strategy</h2>
+
+<p>The implementation is tested at several layers.</p>
+
+<ul>
+<li>Resolver unit tests cover cache-key isolation, TTL scaling, alias preservation, answer limiting, and local upstream races.</li>
+<li>GEO tests use controlled providers to verify multi-source consensus.</li>
+<li>Limiter tests prove that a waiting task cannot exceed the current ceiling, that a live limit increase releases work, and that canceled contexts do not acquire slots.</li>
+<li>Storage tests build a SQLite database above its configured budget, verify cold-record rotation, and confirm a frequently-hit cache entry survives.</li>
+<li>Ghosting tests cover public-suffix scoping, provider parsing, dictionary bounds, persistence, and cache warming.</li>
+<li>Dashboard validation includes linting, production compilation, and server-rendered HTML checks.</li>
+<li>Docker smoke tests verify service health, same-origin API proxying, persistence through engine recreation, and real DNS resolution through <code>127.0.0.1:53</code>.</li>
+</ul>
+
+<p>Testing a resolver only with a successful <code>example.com</code> lookup is not enough. The important cases are partial answers, timeouts, cancellation, cache aging, stale behavior, encrypted transport validation, differing address sets, resource pressure, persistence, and operator error.</p>
+
+<h2 id="operational-guidance">Operational guidance</h2>
+
+<p>A practical starting configuration is intentionally conservative:</p>
+
+<ul>
+<li>keep at least five healthy first-wave paths across more than one provider and protocol;</li>
+<li>use a total DNS timeout that matches the actual network rather than an arbitrary large value;</li>
+<li>keep the second-wave delay shorter than the total timeout;</li>
+<li>begin with the global parallel-task default and lower it only when resource pressure requires it;</li>
+<li>set a database budget that leaves operating-system and container-volume headroom;</li>
+<li>enable endpoint probing only when selecting between returned addresses is worth the added requests;</li>
+<li>enable GEO only when proximity is meaningful for the workload;</li>
+<li>leave Ghosting disabled until its additional discovery traffic is understood and desired;</li>
+<li>review provider terms and rate limits before enabling passive intelligence services; and</li>
+<li>export configuration before major upgrades and preserve the Docker volume.</li>
+</ul>
+
+<p>Weights should not be treated as permanent truth. A network change, VPN, ISP routing event, travel, resolver incident, or protocol restriction can invalidate yesterday’s measurements. SmartPath keeps learning because the path is the variable.</p>
+
+<h2 id="lessons-from-building-smartpath">Lessons from building SmartPath</h2>
+
+<p>The most important lesson is that resilience comes from controlled diversity, not from maximizing concurrency.</p>
+
+<p>Querying every possible provider all the time would create traffic without judgment. Depending on one provider would eliminate the very diversity needed during a path failure. The two-wave model is the balance: enough simultaneous alternatives for a fast decision, a delayed reserve for failure, and learning that changes membership without destroying minimum capacity.</p>
+
+<p>The second lesson is that caching policy is operational policy. Extending a TTL can improve availability but preserve an outdated destination. Serving stale can rescue an outage but should have a clear limit. A database can preserve knowledge but must rotate cold data. Every cache feature is a tradeoff, so each one is visible and adjustable.</p>
+
+<p>The third lesson is that optional intelligence must remain optional. GEO, HTTP probing, certificate transparency, passive APIs, landing-page inspection, and dictionary discovery can all add useful context. They also add requests, privacy implications, rate limits, and failure modes. Ghosting therefore remains a bounded feature that is disabled by default—not a hidden side effect of asking a DNS question.</p>
+
+<p>The fourth lesson is that an adaptive service needs an explanation surface. Operators should be able to answer: Which upstream won? Which paths are currently slow? Why is this resolver in the second wave? Was this answer cached? How much concurrency is active? How much database capacity is reusable? Which Ghosting source discovered this host? A dashboard is valuable when it answers operational questions, not merely when it looks polished.</p>
+
+<h2 id="current-limitations-and-future-direction">Current limitations and future direction</h2>
+
+<p>SmartPath is useful today, but several areas deserve continued work.</p>
+
+<ul>
+<li>Full DNSSEC validation could become an explicit local policy rather than relying on upstream behavior.</li>
+<li>Per-domain or per-network upstream preference could complement global provider learning.</li>
+<li>Additional cache admission policy could prevent one-time bulk queries from displacing broadly useful records.</li>
+<li>Prometheus or OpenTelemetry export could integrate the engine into larger monitoring systems.</li>
+<li>Signed configuration backups and restore workflows could improve operational recovery.</li>
+<li>Router-oriented packages could make deployment easier outside workstations.</li>
+<li>More passive discovery providers could be added through the existing generic parser while preserving strict scoping and limits.</li>
+<li>Network-change detection could reset or segment learning when a device moves between materially different connections.</li>
+</ul>
+
+<p>These additions should follow the same rule as the current system: no hidden unbounded work, no unexplained state, and no optional external traffic enabled by surprise.</p>
+
+<h2 id="final-reflection">Final reflection</h2>
+
+<p>SmartPath DNS began with a recurring operational frustration: an internet connection could be working while one DNS path made the entire system feel broken. Changing resolver addresses manually solved one moment and created no memory for the next.</p>
+
+<p>The project turns that manual reaction into a local control loop. It measures actual paths, races only within explicit limits, keeps a fallback wave, preserves useful answers, learns without eliminating minimum capacity, and makes its internal state visible.</p>
+
+<p>The deeper principle extends beyond DNS:</p>
+
+<blockquote>
+<p>When infrastructure depends on external paths that can fail independently, resilience comes from observable diversity, bounded competition, durable local knowledge, and safe fallback.</p>
+</blockquote>
+
+<p>That is the architecture SmartPath DNS is designed to provide.</p>
+
+<h2 id="project-and-technical-reference">Project and technical reference</h2>
+
+<ul>
+<li><a href="https://github.com/majidershadi/smartpath-dns">SmartPath DNS source repository</a></li>
+<li><a href="https://github.com/majidershadi/smartpath-dns#start-with-docker-recommended-on-this-windows-machine">Docker quick start and operating-system DNS setup</a></li>
+<li><a href="https://github.com/majidershadi/smartpath-dns#how-the-decision-engine-works">Resolver decision-engine documentation</a></li>
+<li><a href="https://github.com/majidershadi/smartpath-dns#ghosting-pre-resolution">Optional Ghosting architecture and safety boundaries</a></li>
+<li><a href="https://github.com/majidershadi/smartpath-dns#capacity-and-database-rotation">Parallel-task and database-capacity controls</a></li>
+</ul>
+
+</div></article><aside class="toc" aria-label="Table of contents"><h2>Contents</h2><ol>
+<li><a href="#design-goals-and-explicit-non-goals">Goals and non-goals</a></li>
+<li><a href="#architecture-a-small-data-plane-and-an-observable-control-plane">Architecture</a></li>
+<li><a href="#the-complete-query-lifecycle">Query lifecycle</a></li>
+<li><a href="#four-upstream-transports-one-common-result-model">Upstream transports</a></li>
+<li><a href="#learning-without-destroying-fallback-capacity">Adaptive learning</a></li>
+<li><a href="#when-dns-answers-are-not-equivalent">Answer comparison</a></li>
+<li><a href="#persistent-cache-as-an-availability-layer">Persistent cache</a></li>
+<li><a href="#resource-guardrails-parallel-work-and-database-growth">Resource guardrails</a></li>
+<li><a href="#ghosting-is-an-optional-prefetch-feature">Optional Ghosting</a></li>
+<li><a href="#security-and-privacy-boundaries">Security and privacy</a></li>
+<li><a href="#profiles-and-the-web-control-plane">Control plane</a></li>
+<li><a href="#deployment-on-windows-macos-and-linux">Deployment</a></li>
+<li><a href="#failure-scenarios-and-expected-behavior">Failure behavior</a></li>
+<li><a href="#verification-strategy">Verification</a></li>
+<li><a href="#operational-guidance">Operations</a></li>
+<li><a href="#lessons-from-building-smartpath">Engineering lessons</a></li>
+<li><a href="#current-limitations-and-future-direction">Future direction</a></li>
+<li><a href="#final-reflection">Final reflection</a></li>
+<li><a href="#project-and-technical-reference">Project reference</a></li>
+</ol></aside></div></main><footer class="site-footer"><div class="site-shell"><span>Majid Ershadi · Security architecture and application security</span><span>Minimal by design</span></div></footer></body></html>

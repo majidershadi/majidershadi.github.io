@@ -23,7 +23,7 @@ for f in html_files:
         if not target.exists(): errors.append(f'{f}: missing image {src}')
         if not img.get('alt'): errors.append(f'{f}: image missing alt {src}')
 # expected core files
-for rel in ['index.html','articles/index.html','articles/building-secure-splunk-apps/index.html','evidence/appinspect-ucc-compatibility/index.html','assets/site.css','assets/og-building-secure-splunk-apps.png','robots.txt','sitemap.xml','.nojekyll']:
+for rel in ['index.html','articles/index.html','articles/building-secure-splunk-apps/index.html','articles/smartpath-dns/index.html','evidence/appinspect-ucc-compatibility/index.html','assets/site.css','assets/og-building-secure-splunk-apps.png','robots.txt','sitemap.xml','.nojekyll']:
     if not (root/rel).exists(): errors.append(f'missing {rel}')
 if errors:
     print('\n'.join(errors)); sys.exit(1)
