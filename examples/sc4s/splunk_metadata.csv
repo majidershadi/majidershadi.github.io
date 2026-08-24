@@ -1,0 +1,9 @@
+# key,metadata,value
+bitdefender_gz,index,av
+bitdefender_gz,sourcetype,bitdefender:gz
+bitdefender_gz,sc4s_template,t_msg_trim
+
+fortinet_fortios_traffic,index,fgt
+fortinet_fortios_utm,index,fgt
+fortinet_fortios_event,index,fgt
+fortinet_fortios_log,index,fgt

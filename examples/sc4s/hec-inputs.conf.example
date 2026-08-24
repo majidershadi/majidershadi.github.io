@@ -1,0 +1,12 @@
+[http]
+disabled = 0
+port = 8088
+enableSSL = 1
+
+[http://sc4s]
+disabled = 0
+token = <REPLACE_AT_DEPLOYMENT>
+description = SC4S ingestion
+index = main
+indexes = main,fgt,av,dlp,cisco
+useACK = 0

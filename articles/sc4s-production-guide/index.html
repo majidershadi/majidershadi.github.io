@@ -1,0 +1,2204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SC4S in Production: From Syslog Fundamentals to High-Load Splunk Ingestion — Majid Ershadi</title>
+<meta name="description" content="A hands-on guide to Splunk Connect for Syslog: architecture, HEC, metadata, buffering, custom parsers/templates, high-load tuning, macvlan, security, and troubleshooting." />
+<meta name="referrer" content="strict-origin-when-cross-origin" />
+<meta name="theme-color" content="#14161a" />
+<link rel="canonical" href="https://majidershadi.github.io/articles/sc4s-production-guide/" />
+<link rel="stylesheet" href="/assets/site.css" />
+<link rel="alternate" type="application/rss+xml" title="Majid Ershadi Articles" href="/articles/feed.xml" />
+<meta property="og:type" content="article" />
+<meta property="og:title" content="SC4S in Production: From Syslog Fundamentals to High-Load Splunk Ingestion" />
+<meta property="og:description" content="A hands-on guide to Splunk Connect for Syslog: architecture, HEC, metadata, buffering, custom parsers/templates, high-load tuning, macvlan, security, and troubleshooting." />
+<meta property="og:url" content="https://majidershadi.github.io/articles/sc4s-production-guide/" />
+<meta name="twitter:card" content="summary" />
+<meta property="article:published_time" content="2026-08-24" />
+<meta property="article:author" content="Majid Ershadi" />
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "SC4S in Production: From Syslog Fundamentals to High-Load Splunk Ingestion", "description": "A hands-on guide to Splunk Connect for Syslog: architecture, HEC, metadata, buffering, custom parsers/templates, high-load tuning, macvlan, security, and troubleshooting.", "author": {"@type": "Person", "name": "Majid Ershadi", "url": "https://majidershadi.github.io/"}, "datePublished": "2026-08-24", "dateModified": "2026-08-24", "mainEntityOfPage": "https://majidershadi.github.io/articles/sc4s-production-guide/", "proficiencyLevel": "Beginner to advanced"}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-shell"><nav class="site-nav" aria-label="Primary">
+<a class="site-brand" href="/">Majid Ershadi<span class="dot">.</span></a>
+<ul class="site-tabs"><li><a href="/">Profile</a></li><li><a href="/articles/" aria-current="page">Articles</a></li></ul>
+</nav></header>
+<main id="main" class="page-main"><div class="article-layout">
+<article class="article"><header class="article-header">
+<p class="kicker">Splunk · Syslog · Architecture · Operations</p>
+<h1 class="article-title">SC4S in Production: From Syslog Fundamentals to High-Load Splunk Ingestion</h1>
+<p class="article-deck">A hands-on architecture, deployment, tuning, customization, and troubleshooting guide for Splunk Connect for Syslog.</p>
+<div class="meta"><time datetime="2026-08-24">Published August 24, 2026</time><span>Last technically verified August 24, 2026</span><span>By Majid Ershadi</span></div>
+</header><div class="article-body"><blockquote>
+<p><strong>Scope and version note.</strong> This guide is written against the SC4S 3.x architecture and was technically checked against current SC4S documentation in August 2026. The examples intentionally separate stable design principles from version-sensitive environment variables. SC4S evolves quickly: check the release notes and the <code>splunk_metadata.csv.example</code> file shipped with the exact image you deploy before treating any key, parser, or tuning value as permanent.</p>
+</blockquote>
+<p>I wrote this after troubleshooting a mixed FortiGate and Bitdefender path through SC4S and Splunk HEC. The collector started cleanly; the difficult failures appeared later in the path: HEC index authorization, metadata overrides, and a JSON body that reached Splunk in the wrong raw shape. That experience determines the order used here—inspect each boundary, preserve evidence, and tune only after the data path is understood.</p>
+<h2 id="1-why-this-guide-exists">1. Why this guide exists</h2>
+<p>Syslog looks simple until it becomes important.</p>
+<p>At small scale the architecture is often:</p>
+<pre><code class="language-text">device -&gt; UDP/514 -&gt; something that listens -&gt; Splunk
+</code></pre>
+<p>That can work for months. Then the first real outage, restart, traffic burst, malformed vendor message, certificate change, or index-routing mistake exposes everything that the simple diagram left out.</p>
+<p>A production syslog layer has to answer more questions:</p>
+<ul>
+<li>What happens when Splunk is unavailable for an hour?</li>
+<li>What happens when a firewall produces a sudden 10x burst?</li>
+<li>Where is the first point at which an event can be lost?</li>
+<li>Does a TCP connection actually make the complete path reliable?</li>
+<li>Which system decides <code>index</code>, <code>sourcetype</code>, <code>host</code>, and <code>source</code>?</li>
+<li>What happens when a new SC4S parser chooses an index that the HEC token is not allowed to use?</li>
+<li>How do you preserve raw JSON when a vendor wraps JSON inside a syslog envelope?</li>
+<li>How do you onboard an unsupported product without turning the collector into a pile of ad-hoc regexes?</li>
+<li>How do you prove that an event was received, classified, buffered, sent, and indexed?</li>
+<li>How do you scale without putting a generic load balancer in front of a protocol that was never designed for modern load balancing?</li>
+</ul>
+<p>That gap is where I have found SC4S useful. I treat it as an ingestion layer rather than just a syslog daemon in a container. It brings together the syslog engine, vendor identification, Splunk metadata assignment, timestamp handling, HEC output, persistent buffering, health instrumentation, and a maintained catalog of source-specific parsing behavior.</p>
+<p>The project describes itself as an open-source packaged solution built on syslog-ng/AxoSyslog and Splunk HEC. Its purpose is to reduce inconsistent syslog deployments, catch-all <code>syslog</code> sourcetypes, deep syslog expertise requirements, and uneven distribution into Splunk.</p>
+<p>The project documentation is the starting point for the details in this guide:</p>
+<ul>
+<li><a href="https://github.com/splunk/splunk-connect-for-syslog">SC4S project</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/main/">SC4S documentation</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/main/architecture/">SC4S architecture considerations</a></li>
+</ul>
+<h2 id="2-first-principles-syslog-is-a-transport-family-not-a-data-model">2. First principles: syslog is a transport family, not a data model</h2>
+<p>Before discussing SC4S, separate four concepts that are frequently mixed together:</p>
+<ol>
+<li><strong>Transport</strong> — UDP, TCP, TLS.</li>
+<li><strong>Framing</strong> — how one event is separated from the next on a byte stream.</li>
+<li><strong>Message format</strong> — RFC3164-like BSD syslog, RFC5424, CEF, LEEF, JSON-in-syslog, vendor-specific text, and noncompliant variants.</li>
+<li><strong>Splunk metadata</strong> — index, sourcetype, host, source, event time, and indexed fields.</li>
+</ol>
+<p>SC4S sits between these worlds.</p>
+<p>A FortiGate message can arrive over UDP and still contain a vendor timestamp and timezone. A Bitdefender message can arrive over TCP but contain a JSON body. A Cisco device can use a normal syslog port while requiring a completely different parser and Splunk sourcetype.</p>
+<p>The receiving port does not define the index. TCP does not define the sourcetype. HEC does not automatically know the vendor.</p>
+<p>That separation is the core mental model for operating SC4S correctly.</p>
+<h2 id="3-what-sc4s-actually-does-in-the-pipeline">3. What SC4S actually does in the pipeline</h2>
+<p>A simplified SC4S path is:</p>
+<pre><code class="language-text">network packet / TCP stream
+        |
+        v
+Linux kernel receive buffers
+        |
+        v
+SC4S listener (syslog-ng/AxoSyslog)
+        |
+        v
+syslog parsing and source identification
+        |
+        v
+vendor/product log path
+        |
+        +--&gt; timestamp handling
+        +--&gt; message normalization
+        +--&gt; metadata assignment
+        |      index
+        |      sourcetype
+        |      source
+        |      host
+        |      template
+        |
+        v
+HEC formatting and batching
+        |
+        v
+memory / persistent disk buffering
+        |
+        v
+HTTPS / HEC
+        |
+        v
+Splunk indexer HEC endpoint
+        |
+        v
+Splunk parsing/indexing/search
+</code></pre>
+<p>Troubleshooting becomes much easier when you stop asking &quot;why are my logs missing?&quot; and instead ask which stage failed.</p>
+<h2 id="4-where-sc4s-belongs-in-a-splunk-architecture">4. Where SC4S belongs in a Splunk architecture</h2>
+<p>For Splunk Enterprise, the preferred path is:</p>
+<pre><code class="language-text">log sources
+    |
+    v
+SC4S
+    |
+    | HTTPS / HEC
+    v
+HEC endpoint(s) on indexers
+    |
+    v
+indexer cluster
+</code></pre>
+<p>SC4S documentation explicitly recommends sending SC4S HEC traffic directly to indexer HEC endpoints instead of placing a Heavy Forwarder in the middle.</p>
+<p>A Heavy Forwarder can still be technically useful when it performs a real function that you cannot place elsewhere, for example:</p>
+<ul>
+<li>mandatory enterprise routing;</li>
+<li>masking or transformation that must happen on the Splunk tier;</li>
+<li>network segmentation that prevents SC4S from reaching indexers;</li>
+<li>a temporary migration dependency.</li>
+</ul>
+<p>But a Heavy Forwarder used only as:</p>
+<pre><code class="language-text">SC4S -&gt; HEC -&gt; HF -&gt; S2S -&gt; indexers
+</code></pre>
+<p>adds another queue, certificate, process, restart domain, and potential bottleneck without improving source-side reliability.</p>
+<p>Reference: <a href="https://splunk.github.io/splunk-connect-for-syslog/main/gettingstarted/getting-started-splunk-setup/">SC4S Splunk setup</a></p>
+<h2 id="5-sc4s-versus-the-common-alternatives">5. SC4S versus the common alternatives</h2>
+<h3 id="heavy-forwarder-as-a-syslog-receiver">Heavy Forwarder as a syslog receiver</h3>
+<p>Advantages:</p>
+<ul>
+<li>familiar Splunk administration;</li>
+<li>native forwarding onward to indexers;</li>
+<li>can perform Splunk parsing/routing functions.</li>
+</ul>
+<p>Weaknesses:</p>
+<ul>
+<li>it is a large Splunk process for a job that a dedicated syslog engine performs more naturally;</li>
+<li>source-side UDP events are still volatile;</li>
+<li>service restart or blocked queues can create operational blind spots;</li>
+<li>vendor identification frequently ends up as local <code>props.conf</code>/<code>transforms.conf</code> engineering;</li>
+<li>buffering and raw syslog lifecycle are less explicit than a dedicated collection tier.</li>
+</ul>
+<p>Use an HF when you need HF capabilities. Do not make it your default syslog daemon simply because it already exists.</p>
+<h3 id="plain-syslog-ng-or-rsyslog">Plain syslog-ng or rsyslog</h3>
+<p>Advantages:</p>
+<ul>
+<li>mature;</li>
+<li>fast;</li>
+<li>highly flexible;</li>
+<li>excellent for non-Splunk destinations;</li>
+<li>complete control over parsing, files, queues, and network transport.</li>
+</ul>
+<p>Weakness in Splunk-heavy environments:</p>
+<p>You own the integration contract yourself.</p>
+<p>You must decide and maintain:</p>
+<ul>
+<li>vendor recognition;</li>
+<li><code>index</code>;</li>
+<li><code>sourcetype</code>;</li>
+<li>timestamp behavior;</li>
+<li>HEC payload construction;</li>
+<li>batching;</li>
+<li>retries;</li>
+<li>Splunk-specific metadata;</li>
+<li>compatibility with Splunk TAs.</li>
+</ul>
+<p>SC4S is essentially a maintained Splunk-oriented opinionated layer around this class of engine.</p>
+<h3 id="universal-forwarder-reading-files">Universal Forwarder reading files</h3>
+<p>A proven traditional pattern remains:</p>
+<pre><code class="language-text">device -&gt; syslog-ng -&gt; durable file -&gt; Universal Forwarder -&gt; Splunk
+</code></pre>
+<p>This is still a strong design when durable files are a requirement, HEC is undesirable, or the organization already has a mature file-based syslog platform.</p>
+<p>The trade-off is that classification and normalization are now divided between the syslog daemon, file layout, UF configuration, and Splunk parsing tier.</p>
+<h3 id="sc4s">SC4S</h3>
+<p>SC4S is strongest when:</p>
+<ul>
+<li>Splunk is the primary destination;</li>
+<li>many network/security products send syslog;</li>
+<li>consistent vendor metadata matters;</li>
+<li>HEC is acceptable;</li>
+<li>you want a maintained parser catalog;</li>
+<li>you want persistent outage buffering without first writing every source to files;</li>
+<li>you need an extensible path from built-in sources to SIMPLE onboarding to custom log paths.</li>
+</ul>
+<h2 id="6-benefits-and-costs">6. Benefits and costs</h2>
+<h3 id="benefits">Benefits</h3>
+<ul>
+<li>vendor-aware source identification;</li>
+<li>recommended Splunk metadata out of the box;</li>
+<li>maintained source catalog;</li>
+<li>HEC-native output;</li>
+<li>persistent disk buffering;</li>
+<li>multiple HEC endpoints;</li>
+<li>metadata override model;</li>
+<li>dedicated ports for special sources;</li>
+<li>SIMPLE onboarding for well-formed unsupported sources;</li>
+<li>local custom filters/parsers/log paths;</li>
+<li>TLS support on input and output;</li>
+<li>health/status endpoint;</li>
+<li>built-in indexed <code>sc4s_*</code> fields;</li>
+<li>performance-tuning controls;</li>
+<li>archive capability;</li>
+<li>a common operational pattern across many syslog vendors.</li>
+</ul>
+<h3 id="costs">Costs</h3>
+<ul>
+<li>another critical service to operate;</li>
+<li>container/runtime knowledge required;</li>
+<li>SC4S release behavior changes over time;</li>
+<li>built-in defaults may not match your index governance;</li>
+<li>HEC batch rejection can amplify one metadata mistake;</li>
+<li>regex-heavy parser paths consume CPU;</li>
+<li>UDP loss cannot be eliminated after the sender has transmitted the packet;</li>
+<li>SIMPLE paths can alter the raw shape expected by a downstream TA unless templates are chosen carefully;</li>
+<li>heavy customization can turn an upgradeable product into a local fork;</li>
+<li>HA for syslog is fundamentally awkward.</li>
+</ul>
+<h2 id="7-edge-collection-beats-centralizing-everything">7. Edge collection beats centralizing everything</h2>
+<p>SC4S documentation recommends <strong>edge collection</strong> when possible.</p>
+<p>Why?</p>
+<p>UDP is send-and-forget. It does not know that a WAN is congested, a firewall state table is overloaded, or a central collector is unavailable. Even TCP syslog is not an application-level durable queue. Long paths increase the number of places where data can disappear.</p>
+<p>A better design is often:</p>
+<pre><code class="language-text">Site A sources -&gt; SC4S-A --\
+Site B sources -&gt; SC4S-B ----&gt; Splunk HEC tier
+Site C sources -&gt; SC4S-C --/
+</code></pre>
+<p>rather than:</p>
+<pre><code class="language-text">every device across every WAN -&gt; one central SC4S
+</code></pre>
+<p>The collector should be close to the sender when the source is high-value or high-volume.</p>
+<p>Reference: <a href="https://splunk.github.io/splunk-connect-for-syslog/main/architecture/">SC4S architecture</a></p>
+<h2 id="8-udp-tcp-rfc6587-and-tls-reliability-without-mythology">8. UDP, TCP, RFC6587, and TLS: reliability without mythology</h2>
+<h3 id="udp">UDP</h3>
+<p>UDP is attractive because it is simple and has low overhead.</p>
+<p>But there is no retransmission. If any of these fill:</p>
+<ul>
+<li>NIC ring;</li>
+<li>kernel receive queue;</li>
+<li>SC4S input window;</li>
+<li>CPU capacity;</li>
+</ul>
+<p>the packet can disappear.</p>
+<p><code>tcpdump</code> proving that a packet reached the interface does not prove syslog-ng consumed it.</p>
+<p>Monitor:</p>
+<pre><code class="language-bash">netstat -su
+ss -lunp
+ethtool -S &lt;nic&gt;
+</code></pre>
+<h3 id="tcp">TCP</h3>
+<p>TCP gives flow control and retransmission at the transport layer. That is better than UDP for many security sources and for larger events.</p>
+<p>But TCP does not create exactly-once end-to-end logging.</p>
+<p>Data can still be lost:</p>
+<ul>
+<li>before a connection is established;</li>
+<li>in the sender when its own queue fills;</li>
+<li>during process restart;</li>
+<li>when application framing is wrong;</li>
+<li>when an application accepts bytes but later discards the message.</li>
+</ul>
+<h3 id="rfc6587">RFC6587</h3>
+<p>Syslog over TCP needs framing. RFC6587 defines mechanisms used to separate messages on a stream. Some products call this &quot;reliable syslog.&quot;</p>
+<p>When a product explicitly supports RFC6587, use the SC4S RFC6587 listener rather than treating arbitrary TCP as equivalent.</p>
+<h3 id="tls">TLS</h3>
+<p>TLS adds confidentiality, server identity verification, and optionally client certificate controls.</p>
+<p>Do not confuse:</p>
+<pre><code class="language-text">SC4S_DEST_SPLUNK_HEC_DEFAULT_TLS_VERIFY=no
+</code></pre>
+<p>with a harmless troubleshooting toggle. Encryption without certificate verification can still permit an active machine-in-the-middle.</p>
+<p>Production should normally use:</p>
+<pre><code class="language-ini">SC4S_DEST_SPLUNK_HEC_DEFAULT_TLS_VERIFY=yes
+</code></pre>
+<p>with the appropriate issuing CA in the SC4S trust path.</p>
+<h2 id="9-a-practical-production-architecture">9. A practical production architecture</h2>
+<p>A strong baseline for an on-premises Splunk environment is:</p>
+<pre><code class="language-text">                          +-------------------+
+FortiGate --UDP/TCP------&gt;|                   |
+Cisco -------TCP/TLS-----&gt;|       SC4S        |
+DLP --------TCP----------&gt;|                   |
+Bitdefender--TCP---------&gt;|                   |
+                          +---------+---------+
+                                    |
+                                    | HTTPS HEC
+                                    |
+                         +----------v----------+
+                         | HEC VIP / indexers  |
+                         +----------+----------+
+                                    |
+                              indexer cluster
+</code></pre>
+<p>One SC4S instance can handle many vendors and many indexes.</p>
+<p>You do <strong>not</strong> need:</p>
+<pre><code class="language-text">one SC4S per index
+one HEC token per index
+one incoming port per Splunk index
+</code></pre>
+<p>Those are different concerns.</p>
+<h3 id="9-1-build-order-do-not-start-with-the-collector">9.1 Build order: do not start with the collector</h3>
+<p>A reliable implementation order is:</p>
+<pre><code class="language-text">1. inventory sources and expected EPS
+2. define index and sourcetype policy
+3. create Splunk indexes
+4. create/test HEC
+5. prepare Linux and storage
+6. deploy SC4S
+7. validate SC4S -&gt; HEC with synthetic events
+8. onboard one real source
+9. validate metadata and field extraction
+10. test HEC outage/buffering
+11. load test
+12. add sources incrementally
+</code></pre>
+<p>This ordering prevents a common failure pattern: starting SC4S first, sending production data immediately, and then discovering that the destination index does not exist or is not permitted by the HEC token.</p>
+<h3 id="9-2-inventory-before-installation">9.2 Inventory before installation</h3>
+<p>Create a source table before touching configuration.</p>
+<p>Example:</p>
+<table>
+<thead>
+<tr>
+  <th>Source</th>
+  <th>Protocol now</th>
+  <th>Desired protocol</th>
+  <th style="text-align:right">EPS normal/peak</th>
+  <th style="text-align:right">Avg bytes</th>
+  <th>Format</th>
+  <th>Target index</th>
+  <th>Expected sourcetype</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>FortiGate</td>
+  <td>UDP/5514</td>
+  <td>RFC6587/TCP later</td>
+  <td style="text-align:right">3k/15k</td>
+  <td style="text-align:right">700</td>
+  <td>FortiOS text</td>
+  <td><code>fgt</code></td>
+  <td><code>fortigate_traffic</code> etc.</td>
+</tr>
+<tr>
+  <td>Bitdefender</td>
+  <td>TCP/1514</td>
+  <td>TCP/1514</td>
+  <td style="text-align:right">200/1k</td>
+  <td style="text-align:right">1400</td>
+  <td>JSON in syslog</td>
+  <td><code>av</code></td>
+  <td><code>bitdefender:gz</code></td>
+</tr>
+<tr>
+  <td>DLP</td>
+  <td>TCP</td>
+  <td>TLS if supported</td>
+  <td style="text-align:right">measure</td>
+  <td style="text-align:right">measure</td>
+  <td>vendor-specific</td>
+  <td><code>dlp</code></td>
+  <td>vendor TA</td>
+</tr>
+<tr>
+  <td>Cisco</td>
+  <td>UDP/TCP</td>
+  <td>source-dependent</td>
+  <td style="text-align:right">measure</td>
+  <td style="text-align:right">measure</td>
+  <td>syslog</td>
+  <td><code>cisco</code></td>
+  <td>product-specific</td>
+</tr>
+</tbody>
+</table>
+<p>This table drives:</p>
+<ul>
+<li>storage sizing;</li>
+<li>protocol decisions;</li>
+<li>parser selection;</li>
+<li>HEC index authorization;</li>
+<li>performance tests;</li>
+<li>firewall rules.</li>
+</ul>
+<h3 id="9-3-splunk-side-create-indexes-first">9.3 Splunk side: create indexes first</h3>
+<p>If the final destination is an indexer cluster, create indexes through the cluster-manager bundle according to your Splunk operating model.</p>
+<p>Conceptual example:</p>
+<pre><code class="language-ini">[fgt]
+homePath = $SPLUNK_DB/fgt/db
+coldPath = $SPLUNK_DB/fgt/colddb
+thawedPath = $SPLUNK_DB/fgt/thaweddb
+repFactor = auto
+
+[av]
+homePath = $SPLUNK_DB/av/db
+coldPath = $SPLUNK_DB/av/colddb
+thawedPath = $SPLUNK_DB/av/thaweddb
+repFactor = auto
+</code></pre>
+<p>Do not invent retention in a copy/paste exercise. Apply the organization's approved:</p>
+<ul>
+<li>retention;</li>
+<li>size;</li>
+<li>volume;</li>
+<li>frozen/archive policy.</li>
+</ul>
+<p>Validate the index before SC4S sends data:</p>
+<pre><code class="language-spl">| eventcount summarize=false index=fgt
+</code></pre>
+<p>or confirm effective index configuration through Splunk's normal administrative tooling.</p>
+<h3 id="9-4-splunk-side-configure-hec">9.4 Splunk side: configure HEC</h3>
+<p>A minimal HEC input for a controlled set of indexes:</p>
+<pre><code class="language-ini">[http]
+disabled = 0
+port = 8088
+enableSSL = 1
+
+[http://sc4s]
+disabled = 0
+token = &lt;SECRET&gt;
+description = SC4S ingestion
+index = main
+indexes = main,fgt,av,dlp,cisco
+useACK = 0
+</code></pre>
+<p>Two policies are possible.</p>
+<p><strong>Restricted token</strong></p>
+<pre><code class="language-ini">indexes = main,fgt,av,dlp,cisco
+</code></pre>
+<p>Benefits:</p>
+<ul>
+<li>least privilege;</li>
+<li>explicit governance.</li>
+</ul>
+<p>Cost:</p>
+<ul>
+<li>every new SC4S destination index must be added before data is enabled;</li>
+<li>one missed index can produce HEC 400 errors and batch loss.</li>
+</ul>
+<p><strong>Unrestricted selected-index list</strong></p>
+<p>This avoids an operational mismatch between SC4S's per-event index metadata and the token allow-list.</p>
+<p>Benefits:</p>
+<ul>
+<li>simpler onboarding;</li>
+<li>lower risk of &quot;Incorrect index&quot; caused solely by token authorization.</li>
+</ul>
+<p>Cost:</p>
+<ul>
+<li>broader HEC token privilege.</li>
+</ul>
+<p>Choose deliberately.</p>
+<h3 id="9-5-test-hec-before-installing-sc4s">9.5 Test HEC before installing SC4S</h3>
+<p>From the future collector host:</p>
+<pre><code class="language-bash">curl --cacert /path/to/ca.pem \
+  https://splunk-hec.example.net:8088/services/collector/health
+</code></pre>
+<p>Expected:</p>
+<pre><code class="language-json">{&quot;text&quot;:&quot;HEC is healthy&quot;,&quot;code&quot;:17}
+</code></pre>
+<p>Then test the exact index:</p>
+<pre><code class="language-bash">read -rsp &quot;HEC token: &quot; HEC_TOKEN
+echo
+
+curl --fail-with-body \
+  --cacert /path/to/ca.pem \
+  -H &quot;Authorization: Splunk ${HEC_TOKEN}&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  https://splunk-hec.example.net:8088/services/collector/event \
+  -d '{
+    &quot;index&quot;:&quot;fgt&quot;,
+    &quot;sourcetype&quot;:&quot;sc4s:preflight&quot;,
+    &quot;event&quot;:&quot;SC4S HEC preflight&quot;
+  }'
+
+unset HEC_TOKEN
+</code></pre>
+<p>Do this for every restricted index before onboarding its source.</p>
+<h3 id="9-6-ubuntulinux-preparation">9.6 Ubuntu/Linux preparation</h3>
+<p>Record the baseline:</p>
+<pre><code class="language-bash">cat /etc/os-release
+uname -a
+timedatectl
+ss -lntup
+df -hT
+df -i
+</code></pre>
+<p>If host <code>syslog-ng</code> or <code>rsyslog</code> already owns the ports SC4S will use, do not immediately purge it.</p>
+<p>Back up configuration, then stop/disable/mask the conflicting listener so rollback remains possible during migration.</p>
+<p>Example:</p>
+<pre><code class="language-bash">systemctl stop syslog-ng
+systemctl disable syslog-ng
+systemctl mask syslog-ng
+</code></pre>
+<p>Do not disable <code>systemd-journald</code> merely because SC4S is being installed. Host journaling and network syslog reception are separate concerns.</p>
+<h3 id="9-7-kernel-baseline">9.7 Kernel baseline</h3>
+<p>SC4S runtime guidance calls out receive-buffer tuning and IPv4 forwarding.</p>
+<p>Example baseline:</p>
+<pre><code class="language-bash">cat &gt;/etc/sysctl.d/90-sc4s.conf &lt;&lt;'EOF'
+net.core.rmem_default = 17039360
+net.core.rmem_max = 17039360
+net.ipv4.ip_forward = 1
+EOF
+
+sysctl --system
+</code></pre>
+<p>Validate:</p>
+<pre><code class="language-bash">sysctl net.core.rmem_default
+sysctl net.core.rmem_max
+sysctl net.ipv4.ip_forward
+</code></pre>
+<p>For high-load tuning, use measured values later rather than starting with extreme buffers.</p>
+<h3 id="9-8-directory-and-persistent-volume-layout">9.8 Directory and persistent-volume layout</h3>
+<p>Typical host paths:</p>
+<pre><code class="language-text">/opt/sc4s/
+  env_file
+  local/
+    context/
+    config/
+  archive/
+  tls/
+</code></pre>
+<p>Create:</p>
+<pre><code class="language-bash">install -d -m 0750 /opt/sc4s
+install -d -m 0750 /opt/sc4s/local
+install -d -m 0750 /opt/sc4s/archive
+install -d -m 0750 /opt/sc4s/tls
+</code></pre>
+<p>Create a persistent container volume:</p>
+<pre><code class="language-bash">docker volume create splunk-sc4s-var
+docker volume inspect splunk-sc4s-var
+</code></pre>
+<p>The persistent volume is important because SC4S disk-buffer state must survive an ordinary container restart.</p>
+<p>Check the backing filesystem:</p>
+<pre><code class="language-bash">df -hT /var/lib/docker
+df -i /var/lib/docker
+</code></pre>
+<p>If buffer capacity requires hundreds of gigabytes or terabytes, solve the storage architecture before production.</p>
+<h3 id="9-9-tls-trust-for-hec">9.9 TLS trust for HEC</h3>
+<p>The trust relationship should normally be:</p>
+<pre><code class="language-text">SC4S trusts CA
+       |
+       v
+CA signs HEC server certificate
+       |
+       v
+HEC URL hostname/IP matches certificate SAN
+</code></pre>
+<p>Place the appropriate CA certificate/chain in the SC4S TLS mount according to the deployment method.</p>
+<p>Validate with OpenSSL:</p>
+<pre><code class="language-bash">openssl s_client \
+  -connect splunk-hec.example.net:8088 \
+  -showcerts &lt;/dev/null
+</code></pre>
+<p>Then with curl:</p>
+<pre><code class="language-bash">curl --cacert /opt/sc4s/tls/trusted.pem \
+  https://splunk-hec.example.net:8088/services/collector/health
+</code></pre>
+<p>Do not enable <code>TLS_VERIFY=no</code> simply to make a certificate problem disappear.</p>
+<h3 id="9-10-create-the-initial-envfile">9.10 Create the initial <code>env_file</code></h3>
+<p>Example:</p>
+<pre><code class="language-ini">SC4S_DEST_SPLUNK_HEC_DEFAULT_URL=https://splunk-hec.example.net:8088
+SC4S_DEST_SPLUNK_HEC_DEFAULT_TOKEN=&lt;SECRET&gt;
+SC4S_DEST_SPLUNK_HEC_DEFAULT_TLS_VERIFY=yes
+
+SC4S_DEST_SPLUNK_HEC_DEFAULT_DISKBUFF_ENABLE=yes
+SC4S_DEST_SPLUNK_HEC_DEFAULT_DISKBUFF_RELIABLE=no
+
+SC4S_LISTEN_DEFAULT_UDP_PORT=5514
+SC4S_LISTEN_STATUS_HOST=127.0.0.1
+</code></pre>
+<p>Permissions:</p>
+<pre><code class="language-bash">chown root:root /opt/sc4s/env_file
+chmod 0600 /opt/sc4s/env_file
+</code></pre>
+<p>Syntax check:</p>
+<pre><code class="language-bash">grep -nEv \
+'^[[:space:]]*($|#|[A-Za-z_][A-Za-z0-9_]*=.*)$' \
+/opt/sc4s/env_file
+</code></pre>
+<p>Expected: no output.</p>
+<h3 id="9-11-systemd-and-container-runtime">9.11 Systemd and container runtime</h3>
+<p>A typical service mounts:</p>
+<ul>
+<li>persistent syslog-ng state;</li>
+<li>local overrides;</li>
+<li>optional archive;</li>
+<li>TLS material.</li>
+</ul>
+<p>Online deployments may use an approved pinned SC4S image reference.</p>
+<p>Air-gapped deployments should use a locally loaded/tagged image and:</p>
+<pre><code class="language-text">--pull=never
+</code></pre>
+<p>Do not make an offline service depend on:</p>
+<pre><code class="language-text">ExecStartPre=docker pull ...
+</code></pre>
+<p>Validate the unit:</p>
+<pre><code class="language-bash">systemd-analyze verify /etc/systemd/system/sc4s.service
+systemctl daemon-reload
+systemctl enable sc4s
+systemctl start sc4s
+</code></pre>
+<h3 id="9-12-first-startup-validation">9.12 First startup validation</h3>
+<p>Check:</p>
+<pre><code class="language-bash">systemctl status sc4s --no-pager -l
+docker ps --filter name=SC4S
+docker logs --tail 200 SC4S
+</code></pre>
+<p>Expected milestones include:</p>
+<pre><code class="language-text">HEC connection test successful
+SC4S version=...
+health/status process started
+syslog-ng started
+</code></pre>
+<p>Then:</p>
+<pre><code class="language-bash">docker exec SC4S \
+  syslog-ng-ctl healthcheck --timeout 5
+</code></pre>
+<p>And:</p>
+<pre><code class="language-bash">docker exec SC4S syslog-ng-ctl stats \
+  | grep 'dst.http;d_hec_fmt'
+</code></pre>
+<p>Do not onboard a real source while SC4S startup is already producing HEC 400/401/TLS failures.</p>
+<h3 id="9-13-confirm-listeners">9.13 Confirm listeners</h3>
+<p>UDP example:</p>
+<pre><code class="language-bash">ss -lunp | grep ':5514'
+</code></pre>
+<p>TCP example:</p>
+<pre><code class="language-bash">ss -lntp | grep ':1514'
+</code></pre>
+<p>If a configured listener is missing:</p>
+<ol>
+<li>validate <code>env_file</code>;</li>
+<li>check container environment;</li>
+<li>check preprocessed config;</li>
+<li>check port conflicts;</li>
+<li>inspect SC4S startup logs.</li>
+</ol>
+<h3 id="9-14-first-synthetic-event">9.14 First synthetic event</h3>
+<p>A generic UDP test proves transport, not vendor classification:</p>
+<pre><code class="language-bash">logger \
+  --udp \
+  --server &lt;SC4S_IP&gt; \
+  --port 5514 \
+  --tag sc4s-test \
+  &quot;SC4S-SYNTHETIC-001&quot;
+</code></pre>
+<p>Search broadly:</p>
+<pre><code class="language-spl">index=* &quot;SC4S-SYNTHETIC-001&quot;
+| table _time index host source sourcetype _raw
+</code></pre>
+<p>Then send a vendor-representative sanitized sample or enable a low-risk real source.</p>
+<h3 id="9-15-first-real-source-acceptance">9.15 First real source acceptance</h3>
+<p>For each source prove:</p>
+<pre><code class="language-text">packet/connection reaches collector
+listener accepts it
+SC4S identifies correct vendor/product
+correct index
+correct sourcetype
+correct host
+correct timestamp
+expected _raw shape
+TA field extraction works
+HEC dropped counter does not increase
+</code></pre>
+<p>Only after that should the source be considered onboarded.</p>
+<h2 id="10-one-hec-token-many-indexes">10. One HEC token, many indexes</h2>
+<p>SC4S sets the index per event.</p>
+<p>Example HEC event:</p>
+<pre><code class="language-json">{
+  &quot;index&quot;: &quot;fgt&quot;,
+  &quot;sourcetype&quot;: &quot;fortigate_traffic&quot;,
+  &quot;host&quot;: &quot;fgt-01&quot;,
+  &quot;event&quot;: &quot;...&quot;
+}
+</code></pre>
+<p>The HEC input setting:</p>
+<pre><code class="language-ini">index = main
+</code></pre>
+<p>means &quot;use <code>main</code> if the event does not specify an index.&quot;</p>
+<p>It does <strong>not</strong> override the event-level <code>&quot;index&quot;:&quot;fgt&quot;</code> field.</p>
+<p>The HEC <code>indexes</code> list is authorization:</p>
+<pre><code class="language-ini">indexes = main,fgt,av,dlp,cisco
+</code></pre>
+<p>A scalable token might therefore be:</p>
+<pre><code class="language-ini">[http]
+disabled = 0
+port = 8088
+enableSSL = 1
+
+[http://sc4s]
+disabled = 0
+token = &lt;SECRET&gt;
+description = SC4S ingestion
+index = main
+indexes = main,fgt,av,dlp,cisco
+useACK = 0
+</code></pre>
+<p>SC4S documentation warns that if an event specifies an index that the token cannot use, HEC returns HTTP 400. Because SC4S batches multiple events, one bad event can cause collateral loss in that batch.</p>
+<p>Operational rule:</p>
+<blockquote>
+<p>Create the Splunk index, authorize it on the HEC token, test it manually, then enable the new SC4S route.</p>
+</blockquote>
+<p>Do not enable HEC indexer acknowledgement for SC4S unless current SC4S documentation explicitly changes its support position. The syslog-ng HTTP destination has historically not supported Splunk HEC ACK semantics.</p>
+<h2 id="11-why-sc4s-ships-with-netfw-netops-netdlp-and-similar-indexes">11. Why SC4S ships with <code>netfw</code>, <code>netops</code>, <code>netdlp</code>, and similar indexes</h2>
+<p>SC4S defaults are a taxonomy, not a law.</p>
+<p>For example, FortiOS defaults historically map categories such as traffic/UTM to network-firewall indexes and event/system categories to network-operations indexes.</p>
+<p>That creates a useful zero-configuration onboarding experience.</p>
+<p>But your organization may require:</p>
+<pre><code class="language-text">FortiGate -&gt; fgt
+Bitdefender -&gt; av
+DLP -&gt; dlp
+Cisco -&gt; cisco
+</code></pre>
+<p>That is valid.</p>
+<p>The index naming policy is your governance decision. SC4S's job is to route consistently.</p>
+<h2 id="12-the-metadata-override-model">12. The metadata override model</h2>
+<p>SC4S maintains an internal metadata mapping.</p>
+<p>A reference copy is deposited at:</p>
+<pre><code class="language-text">/opt/sc4s/local/context/splunk_metadata.csv.example
+</code></pre>
+<p>Do not edit the <code>.example</code> file.</p>
+<p>Create or edit:</p>
+<pre><code class="language-text">/opt/sc4s/local/context/splunk_metadata.csv
+</code></pre>
+<p>The format is:</p>
+<pre><code class="language-csv">key,metadata,value
+</code></pre>
+<p>Supported metadata includes:</p>
+<ul>
+<li><code>index</code>;</li>
+<li><code>source</code>;</li>
+<li><code>host</code>;</li>
+<li><code>sourcetype</code>;</li>
+<li><code>sc4s_template</code>.</li>
+</ul>
+<p>SC4S documentation recommends overriding the index most often and changing sourcetype/template only when you understand the downstream TA implications.</p>
+<p>Reference: <a href="https://splunk.github.io/splunk-connect-for-syslog/main/configuration/">SC4S configuration — metadata overrides</a></p>
+<h2 id="13-example-override-fortigate-into-your-own-index">13. Example: override FortiGate into your own index</h2>
+<p>If your policy requires all FortiGate events in <code>fgt</code>:</p>
+<pre><code class="language-csv">fortinet_fortios_traffic,index,fgt
+fortinet_fortios_utm,index,fgt
+fortinet_fortios_event,index,fgt
+fortinet_fortios_log,index,fgt
+</code></pre>
+<p>Check the exact keys for your release:</p>
+<pre><code class="language-bash">grep '^fortinet_fortios_' \
+  /opt/sc4s/local/context/splunk_metadata.csv.example
+</code></pre>
+<p>Why check every release?</p>
+<p>Because <code>.example</code> reflects the internal mapping shipped with that image. It can change.</p>
+<p>The FortiOS source documentation is also a reference:</p>
+<ul>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/main/sources/vendor/Fortinet/fortios/">SC4S Fortinet FortiOS source</a></li>
+</ul>
+<h2 id="14-sourcetype-overrides-are-more-dangerous-than-index-overrides">14. Sourcetype overrides are more dangerous than index overrides</h2>
+<p>A custom index changes data placement.</p>
+<p>A custom sourcetype can change parsing semantics.</p>
+<p>A Splunk TA may expect:</p>
+<pre><code class="language-text">fortigate_traffic
+</code></pre>
+<p>or a version-specific alternate naming convention.</p>
+<p>If you arbitrarily rename it:</p>
+<pre><code class="language-csv">fortinet_fortios_traffic,sourcetype,my_firewall
+</code></pre>
+<p>the TA's:</p>
+<ul>
+<li>field extractions;</li>
+<li>aliases;</li>
+<li>eventtypes;</li>
+<li>tags;</li>
+<li>CIM mappings;</li>
+</ul>
+<p>may stop applying.</p>
+<p>Index overrides are organizational. Sourcetype overrides are application contracts.</p>
+<p>Treat them differently.</p>
+<h2 id="15-simple-sources-the-fast-onboarding-bridge">15. SIMPLE sources: the fast onboarding bridge</h2>
+<p>SC4S provides a SIMPLE log path for a source that:</p>
+<ul>
+<li>is not already supported;</li>
+<li>sends well-formed RFC5424 or a common RFC3164 variant;</li>
+<li>can use a dedicated port;</li>
+<li>needs quick routing to a known index/sourcetype.</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-csv">bitdefender_gz,index,av
+bitdefender_gz,sourcetype,bitdefender:gz
+</code></pre>
+<p>and:</p>
+<pre><code class="language-ini">SC4S_LISTEN_SIMPLE_BITDEFENDER_GZ_TCP_PORT=1514
+</code></pre>
+<p>The naming must match:</p>
+<pre><code class="language-text">metadata key       bitdefender_gz
+environment name   BITDEFENDER_GZ
+</code></pre>
+<p>Reference: <a href="https://splunk.github.io/splunk-connect-for-syslog/main/sources/simple/">SC4S SIMPLE source</a></p>
+<p>Important:</p>
+<blockquote>
+<p>SIMPLE is intentionally an interim onboarding mechanism. When a source needs deeper parsing, enrichment, normalization, or special raw-message handling, move to a dedicated log path.</p>
+</blockquote>
+<h2 id="16-why-json-can-stop-parsing-after-sc4s-is-inserted">16. Why JSON can stop parsing after SC4S is inserted</h2>
+<p>This is a classic integration problem.</p>
+<p>Before SC4S:</p>
+<pre><code class="language-text">Bitdefender -&gt; HF
+_raw = {&quot;field&quot;:&quot;value&quot;, ...}
+</code></pre>
+<p>The TA sees a pure JSON document.</p>
+<p>After a generic syslog layer:</p>
+<pre><code class="language-text">Bitdefender -&gt; SC4S -&gt; HF
+_raw = Aug 24 08:00:00 host program: {&quot;field&quot;:&quot;value&quot;, ...}
+</code></pre>
+<p>That is no longer a pure JSON document.</p>
+<p><code>KV_MODE=json</code>, <code>spath</code>, or a vendor TA may expect the first meaningful character to be <code>{</code>.</p>
+<p>The transport is working. The parsing contract is not.</p>
+<p>This is why SC4S templates matter.</p>
+<h2 id="17-built-in-output-templates-you-should-understand">17. Built-in output templates you should understand</h2>
+<p>SC4S uses syslog-ng/AxoSyslog templates to decide what becomes the Splunk event body.</p>
+<p>Important built-ins include:</p>
+<table>
+<thead>
+<tr>
+  <th>Template</th>
+  <th>Concept</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>t_standard</code></td>
+  <td>Normal date/host/header/message style</td>
+</tr>
+<tr>
+  <td><code>t_msg_only</code></td>
+  <td>Send only <code>${MSGONLY}</code></td>
+</tr>
+<tr>
+  <td><code>t_msg_trim</code></td>
+  <td>Send <code>${MSGONLY}</code> with surrounding whitespace stripped</td>
+</tr>
+<tr>
+  <td><code>t_hdr_msg</code></td>
+  <td>Header + message</td>
+</tr>
+<tr>
+  <td><code>t_legacy_hdr_msg</code></td>
+  <td>Legacy header + message</td>
+</tr>
+<tr>
+  <td><code>t_hdr_sdata_msg</code></td>
+  <td>Header + RFC5424 structured data + message</td>
+</tr>
+<tr>
+  <td><code>t_program_msg</code></td>
+  <td>Program/PID + message</td>
+</tr>
+<tr>
+  <td><code>t_JSON_3164</code></td>
+  <td>JSON representation of RFC3164-related macros</td>
+</tr>
+<tr>
+  <td><code>t_JSON_5424</code></td>
+  <td>JSON representation of RFC5424-related macros</td>
+</tr>
+</tbody>
+</table>
+<p>Current reference:</p>
+<ul>
+<li><a href="https://github.com/splunk/splunk-connect-for-syslog/blob/main/docs/configuration.md">SC4S configuration templates</a></li>
+<li><a href="https://axoflow.com/docs/axosyslog-core/chapter-manipulating-messages/customizing-message-format/configuring-macros/">AxoSyslog templates and macros</a></li>
+</ul>
+<p>For JSON-in-syslog, a useful override is:</p>
+<pre><code class="language-csv">bitdefender_gz,sc4s_template,t_msg_trim
+</code></pre>
+<p>The pipeline becomes:</p>
+<pre><code class="language-text">RFC syslog envelope + JSON MESSAGE
+          |
+          v
+SC4S parses the envelope
+          |
+          v
+t_msg_trim
+          |
+          v
+pure JSON MESSAGE
+          |
+          v
+HEC _raw
+</code></pre>
+<p>Verify:</p>
+<pre><code class="language-spl">index=av sourcetype=&quot;bitdefender:gz&quot;
+| eval first_character=substr(trim(_raw),1,1)
+| stats count by first_character
+</code></pre>
+<p>Expected for JSON:</p>
+<pre><code class="language-text">{
+</code></pre>
+<h2 id="18-preserve-raw-first-normalize-second">18. Preserve raw first, normalize second</h2>
+<p>When onboarding a source, capture what actually arrives before writing parsing rules.</p>
+<p>Useful commands:</p>
+<pre><code class="language-bash">tcpdump -ni any -s0 -A -c 10 'tcp port 1514'
+tcpdump -ni any -s0 -A -c 10 'udp port 5514'
+</code></pre>
+<p>For development only, SC4S provides raw-message storage controls. Do not leave raw-message capture enabled in production: it has substantial memory/disk overhead.</p>
+<p>The safest development loop is:</p>
+<pre><code class="language-text">capture raw
+-&gt; classify transport/framing
+-&gt; identify syslog envelope
+-&gt; identify vendor body
+-&gt; compare expected Splunk TA sourcetype
+-&gt; choose template
+-&gt; test field extraction
+-&gt; only then normalize further
+</code></pre>
+<h2 id="19-creating-your-own-sc4s-log-path">19. Creating your own SC4S log path</h2>
+<p>When SIMPLE is no longer enough, SC4S supports local custom parser/log-path development under the mounted local directory.</p>
+<p>The runtime documentation points to the local configuration structure under:</p>
+<pre><code class="language-text">/opt/sc4s/local/config/
+</code></pre>
+<p>Use the shipped examples as a starting point.</p>
+<p>A custom SC4S parser conceptually has two parts:</p>
+<ol>
+<li>an <code>application</code> filter that identifies the source;</li>
+<li>a parser block that sets metadata and performs message handling.</li>
+</ol>
+<p>SC4S parser documentation shows the pattern:</p>
+<pre><code class="language-text">incoming message
+    |
+application filter
+    |
+custom parser
+    |
+r_set_splunk_dest_default(...)
+    |
+template + metadata
+</code></pre>
+<p>References:</p>
+<ul>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/main/gettingstarted/getting-started-runtime-configuration/">SC4S runtime configuration</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/develop/creating_parsers/">Creating SC4S parsers</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/develop/creating_parsers/filter_message/">Filtering messages</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/develop/creating_parsers/parse_message/">Parsing messages</a></li>
+</ul>
+<h2 id="20-parser-design-identify-narrowly">20. Parser design: identify narrowly</h2>
+<p>A parser should not match because a message contains a common word.</p>
+<p>Bad concept:</p>
+<pre><code class="language-text">message contains &quot;Firewall&quot;
+</code></pre>
+<p>Better:</p>
+<pre><code class="language-text">specific RFC5424 SD-ID
+specific program
+specific vendor prefix
+specific stable message signature
+source IP + payload signature when unavoidable
+</code></pre>
+<p>Over-broad filters create silent misclassification.</p>
+<p>The most dangerous parsing error is often not &quot;no match.&quot; It is &quot;wrong match.&quot;</p>
+<h2 id="21-rewriting-and-trimming-raw-messages">21. Rewriting and trimming raw messages</h2>
+<p>Because SC4S uses the syslog-ng/AxoSyslog engine, you can use rewrite rules when you need controlled message modification.</p>
+<p>AxoSyslog supports <code>subst()</code> for regex or string replacement on soft macros such as <code>MESSAGE</code>.</p>
+<p>Conceptual example:</p>
+<pre><code class="language-conf">rewrite r_remove_vendor_prefix {
+    subst(
+        &quot;^PREFIX:[[:space:]]*&quot;,
+        &quot;&quot;,
+        value(&quot;MESSAGE&quot;)
+    );
+};
+</code></pre>
+<p>A simple string replacement is generally cheaper than a complex regex. Do not use regex because it is familiar; use it when the structure actually requires it.</p>
+<p>Reference:</p>
+<ul>
+<li><a href="https://axoflow.com/docs/axosyslog-core/chapter-manipulating-messages/modifying-messages/">AxoSyslog rewrite rules</a></li>
+<li><a href="https://axoflow.com/docs/axosyslog-core/chapter-manipulating-messages/modifying-messages/rewrite-replace/">Replace message parts</a></li>
+</ul>
+<h2 id="22-extracting-fields-with-regex">22. Extracting fields with regex</h2>
+<p>AxoSyslog provides <code>regexp-parser()</code>.</p>
+<p>Named capture groups create name-value pairs.</p>
+<p>Concept:</p>
+<pre><code class="language-conf">parser p_vendor {
+    regexp-parser(
+        patterns(
+            &quot;^device=(?&lt;device&gt;[^ ]+) action=(?&lt;action&gt;[^ ]+)&quot;
+        )
+        prefix(&quot;vendor.&quot;)
+        template(&quot;${MESSAGE}&quot;)
+    );
+};
+</code></pre>
+<p>You can then use the extracted fields in:</p>
+<ul>
+<li>conditions;</li>
+<li>metadata decisions;</li>
+<li>templates;</li>
+<li>indexed HEC fields.</li>
+</ul>
+<p>Reference: <a href="https://axoflow.com/docs/axosyslog-core/chapter-parsers/parser-regexp/">AxoSyslog regexp parser</a></p>
+<p>But be conservative.</p>
+<p>Complex PCRE on every event can become a CPU bottleneck at high EPS. Prefer:</p>
+<ul>
+<li>native SC4S parser support;</li>
+<li>structured data;</li>
+<li>delimiter parsers;</li>
+<li>key-value parsers;</li>
+<li>JSON parsers;</li>
+<li>simple string/prefix checks;</li>
+</ul>
+<p>before expensive regular expressions.</p>
+<h2 id="23-templates-give-you-control-over-the-final-splunk-raw">23. Templates give you control over the final Splunk <code>_raw</code></h2>
+<p>A custom template can combine macros and parsed fields.</p>
+<p>AxoSyslog template concept:</p>
+<pre><code class="language-conf">template t_example {
+    template(&quot;${ISODATE} ${HOST} ${MESSAGE}\n&quot;);
+};
+</code></pre>
+<p>SC4S local parser design can select a template through its Splunk destination rewrite logic.</p>
+<p>The design question is:</p>
+<blockquote>
+<p>What should the downstream Splunk TA see as <code>_raw</code>?</p>
+</blockquote>
+<p>Not:</p>
+<blockquote>
+<p>What output format looks nicest in tcpdump?</p>
+</blockquote>
+<p>If a TA expects pure JSON, preserve pure JSON. If a TA expects a vendor prefix, do not trim it. If the timestamp is parsed into HEC <code>time</code>, you may not need to retain it in <code>_raw</code>.</p>
+<h2 id="24-conditional-metadata-by-host-ip-subnet-or-compliance-scope">24. Conditional metadata by host, IP, subnet, or compliance scope</h2>
+<p>Sometimes vendor-level metadata is too coarse.</p>
+<p>Example:</p>
+<pre><code class="language-text">same firewall product
+production devices -&gt; pci_firewall
+lab devices        -&gt; lab_firewall
+</code></pre>
+<p>SC4S supports compliance/source-based override files in its local context area. Filters can match host or netmask, and the corresponding CSV can override <code>.splunk.index</code>, <code>.splunk.source</code>, <code>.splunk.sourcetype</code>, or add indexed fields.</p>
+<p>This is useful for:</p>
+<ul>
+<li>PCI scope;</li>
+<li>geography;</li>
+<li>security zones;</li>
+<li>regulated environments;</li>
+<li>acquisition/migration boundaries.</li>
+</ul>
+<p>Do not duplicate a whole parser just to change an index for one subnet.</p>
+<p>Reference: <a href="https://github.com/splunk/splunk-connect-for-syslog/blob/main/docs/configuration.md">SC4S metadata/compliance overrides</a></p>
+<h2 id="25-disk-buffering-what-it-protects-and-what-it-cannot-protect">25. Disk buffering: what it protects and what it cannot protect</h2>
+<p>SC4S disk buffering protects the segment:</p>
+<pre><code class="language-text">SC4S -&gt; Splunk HEC
+</code></pre>
+<p>It cannot recover a UDP datagram that never reached SC4S.</p>
+<p>When all HEC destinations are unavailable, SC4S can queue events locally and drain them later.</p>
+<p>The approximate sizing model documented by SC4S is:</p>
+<pre><code class="language-text">required bytes
+≈ peak EPS
+× average event bytes
+× outage seconds
+× ~1.7 syslog-ng overhead
+</code></pre>
+<p>Example:</p>
+<pre><code class="language-text">20,000 EPS
+× 800 bytes
+× 14,400 seconds (4 hours)
+× 1.7
+≈ 391.7 GB
+</code></pre>
+<p>Provision more than the mathematical minimum.</p>
+<p>The system also needs enough post-outage throughput to drain the queue:</p>
+<pre><code class="language-text">maximum output throughput &gt; normal incoming rate
+</code></pre>
+<p>Otherwise the buffer technically works but never catches up.</p>
+<p>SC4S recommends normal disk buffering over &quot;reliable&quot; disk buffering for this use because reliable mode imposes significant performance cost with limited practical benefit.</p>
+<p>Reference: <a href="https://github.com/splunk/splunk-connect-for-syslog/blob/main/docs/configuration.md">SC4S disk buffering</a></p>
+<h2 id="26-http-400-is-different-from-an-outage">26. HTTP 400 is different from an outage</h2>
+<p>This distinction is operationally critical.</p>
+<p>A network outage or HTTP 503 is transient. Buffering/retry is appropriate.</p>
+<p>HTTP 400 means the request is invalid.</p>
+<p>Example:</p>
+<pre><code class="language-json">{&quot;text&quot;:&quot;Incorrect index&quot;,&quot;code&quot;:7}
+</code></pre>
+<p>SC4S may treat this as non-retryable and drop the affected batch.</p>
+<p>This is why:</p>
+<pre><code class="language-text">new index
+-&gt; create in Splunk
+-&gt; permit on token
+-&gt; curl test
+-&gt; metadata override
+-&gt; SC4S restart
+-&gt; production traffic
+</code></pre>
+<p>is safer than enabling a source first.</p>
+<h2 id="27-monitoring-the-hec-destination">27. Monitoring the HEC destination</h2>
+<p>Useful counters:</p>
+<pre><code class="language-bash">docker exec SC4S syslog-ng-ctl stats \
+  | grep 'dst.http;d_hec_fmt'
+</code></pre>
+<p>Interpretation:</p>
+<pre><code class="language-text">written   successfully delivered
+queued    waiting
+dropped   discarded
+</code></pre>
+<p>A historical nonzero <code>dropped</code> value is evidence, not necessarily a current fault.</p>
+<p>Watch the delta:</p>
+<pre><code class="language-bash">watch -n 5 \
+  &quot;docker exec SC4S syslog-ng-ctl stats | grep 'dst.http;d_hec_fmt'&quot;
+</code></pre>
+<p>Healthy steady state:</p>
+<pre><code class="language-text">written -&gt; increasing
+queued  -&gt; near zero
+dropped -&gt; not increasing
+</code></pre>
+<h2 id="28-sc4s-health-is-not-the-same-as-data-health">28. SC4S health is not the same as data health</h2>
+<p>This can return healthy:</p>
+<pre><code class="language-bash">docker exec SC4S \
+  syslog-ng-ctl healthcheck --timeout 5
+</code></pre>
+<p>while a vendor stream is still being rejected by HEC.</p>
+<p>Healthcheck answers:</p>
+<pre><code class="language-text">is the engine/main loop healthy?
+</code></pre>
+<p>It does not prove:</p>
+<pre><code class="language-text">every source is classified correctly
+every index exists
+every HEC authorization is valid
+every TA is extracting fields
+</code></pre>
+<p>Use layered health checks.</p>
+<h2 id="29-the-status-endpoint-on-tcp8080">29. The status endpoint on TCP/8080</h2>
+<p>SC4S runs a status/health HTTP endpoint, default port 8080.</p>
+<p>Current SC4S also supports changing the bind host.</p>
+<p>If only local monitoring needs it:</p>
+<pre><code class="language-ini">SC4S_LISTEN_STATUS_HOST=127.0.0.1
+</code></pre>
+<p>This is better than exposing a plain HTTP status service on every interface and relying only on perimeter filtering.</p>
+<p>Reference: <a href="https://github.com/splunk/splunk-connect-for-syslog/blob/main/docs/configuration.md">SC4S configuration — status host/port</a></p>
+<h2 id="30-air-gapped-deployment">30. Air-gapped deployment</h2>
+<p>An air-gapped SC4S host should not execute a registry pull on every service restart.</p>
+<p>Bad for an offline system:</p>
+<pre><code class="language-ini">ExecStartPre=/usr/bin/docker pull ${SC4S_IMAGE}
+</code></pre>
+<p>The service can fail before the locally cached image is started.</p>
+<p>A better offline lifecycle is:</p>
+<pre><code class="language-text">connected staging system
+-&gt; obtain approved image
+-&gt; verify digest/signature according to policy
+-&gt; docker save / official offline archive
+-&gt; controlled media transfer
+-&gt; checksum verification
+-&gt; docker load
+-&gt; local tag
+-&gt; --pull=never
+</code></pre>
+<p>Example:</p>
+<pre><code class="language-bash">docker load &lt; sc4s-image.tar
+docker tag &lt;loaded-image&gt; sc4slocal:approved
+</code></pre>
+<p>Systemd:</p>
+<pre><code class="language-text">Environment=&quot;SC4S_IMAGE=sc4slocal:approved&quot;
+</code></pre>
+<p>and:</p>
+<pre><code class="language-text">docker run --pull=never ...
+</code></pre>
+<p>Keep the persistent volume separate from the ephemeral container image.</p>
+<h2 id="31-baseline-host-preparation">31. Baseline host preparation</h2>
+<p>At minimum verify:</p>
+<pre><code class="language-bash">cat /etc/os-release
+uname -a
+timedatectl
+chronyc tracking
+ss -lntup
+df -hT
+df -i
+</code></pre>
+<p>SC4S runtime guidance recommends tuning Linux receive buffers because distribution defaults can be too small for high-volume UDP.</p>
+<p>Typical sysctl baseline:</p>
+<pre><code class="language-ini">net.core.rmem_default = 17039360
+net.core.rmem_max = 17039360
+net.ipv4.ip_forward = 1
+</code></pre>
+<p>Do not copy tuning values blindly into a high-EPS system. Benchmark them.</p>
+<p>Reference: <a href="https://github.com/splunk/splunk-connect-for-syslog/blob/main/docs/gettingstarted/getting-started-runtime-configuration.md">SC4S runtime configuration</a></p>
+<h2 id="32-a-clean-envfile-baseline">32. A clean <code>env_file</code> baseline</h2>
+<p>Example:</p>
+<pre><code class="language-ini">SC4S_DEST_SPLUNK_HEC_DEFAULT_URL=https://splunk-hec.example.net:8088
+SC4S_DEST_SPLUNK_HEC_DEFAULT_TOKEN=&lt;SECRET&gt;
+SC4S_DEST_SPLUNK_HEC_DEFAULT_TLS_VERIFY=yes
+
+SC4S_DEST_SPLUNK_HEC_DEFAULT_DISKBUFF_ENABLE=yes
+SC4S_DEST_SPLUNK_HEC_DEFAULT_DISKBUFF_RELIABLE=no
+
+# FortiGate example
+SC4S_LISTEN_DEFAULT_UDP_PORT=5514
+SC4S_OPTION_FORTINET_SOURCETYPE_PREFIX=fortigate
+
+# Bitdefender SIMPLE example
+SC4S_LISTEN_SIMPLE_BITDEFENDER_GZ_TCP_PORT=1514
+
+# Restrict local health endpoint where appropriate
+SC4S_LISTEN_STATUS_HOST=127.0.0.1
+</code></pre>
+<p>Keep comments valid:</p>
+<pre><code class="language-text"># comment
+</code></pre>
+<p>not:</p>
+<pre><code class="language-text">\# comment
+</code></pre>
+<p>Validate an env file:</p>
+<pre><code class="language-bash">grep -nEv \
+'^[[:space:]]*($|#|[A-Za-z_][A-Za-z0-9_]*=.*)$' \
+/opt/sc4s/env_file
+</code></pre>
+<p>Expected: no output.</p>
+<h2 id="33-secrets">33. Secrets</h2>
+<p>Treat the HEC token as a credential.</p>
+<p>Do not:</p>
+<ul>
+<li>commit it to Git;</li>
+<li>paste it into tickets or screenshots;</li>
+<li>leave it in shell history;</li>
+<li>reuse one token across unrelated trust zones without reason.</li>
+</ul>
+<p>Use file permissions:</p>
+<pre><code class="language-bash">chown root:root /opt/sc4s/env_file
+chmod 0600 /opt/sc4s/env_file
+</code></pre>
+<p>If a token is exposed, rotate it.</p>
+<h2 id="34-high-load-ingestion-find-the-actual-bottleneck-first">34. High-load ingestion: find the actual bottleneck first</h2>
+<p>Do not tune random knobs after seeing dropped events.</p>
+<p>A syslog path has multiple queues:</p>
+<pre><code class="language-text">sender queue
+NIC
+kernel socket buffer
+SC4S source
+SC4S input window
+parser CPU
+HEC worker queue
+disk buffer
+network to Splunk
+HEC endpoint
+Splunk ingestion queues
+indexer storage
+</code></pre>
+<p>Measure each layer.</p>
+<h3 id="networkkernel">Network/kernel</h3>
+<pre><code class="language-bash">netstat -su
+ss -s
+ethtool -S &lt;nic&gt;
+sar -n DEV 1
+</code></pre>
+<h3 id="cpu">CPU</h3>
+<pre><code class="language-bash">mpstat -P ALL 1
+pidstat -p $(pgrep -f syslog-ng | head -1) 1
+</code></pre>
+<h3 id="memory">Memory</h3>
+<pre><code class="language-bash">free -h
+vmstat 1
+</code></pre>
+<h3 id="disk">Disk</h3>
+<pre><code class="language-bash">iostat -xz 1
+df -h
+</code></pre>
+<h3 id="sc4s">SC4S</h3>
+<pre><code class="language-bash">docker exec SC4S syslog-ng-ctl stats
+docker exec SC4S syslog-ng-ctl healthcheck --timeout 5
+docker logs --since 10m SC4S
+</code></pre>
+<h3 id="splunk">Splunk</h3>
+<p>Search <code>_internal</code> for HEC errors, queue pressure, and indexing delays.</p>
+<h2 id="35-receive-buffer-tuning">35. Receive-buffer tuning</h2>
+<p>SC4S documentation recommends increasing receive buffers when bursts overflow the default capacity.</p>
+<p>Host:</p>
+<pre><code class="language-ini">net.core.rmem_default = 536870912
+net.core.rmem_max = 536870912
+</code></pre>
+<p>SC4S example:</p>
+<pre><code class="language-ini">SC4S_SOURCE_UDP_SO_RCVBUFF=536870912
+SC4S_SOURCE_TCP_SO_RCVBUFF=536870912
+SC4S_SOURCE_RFC6587_SO_RCVBUFF=536870912
+</code></pre>
+<p>The documentation reports substantial performance improvement in its lab, but this is not a universal sizing rule.</p>
+<p>Larger buffers:</p>
+<ul>
+<li>absorb bursts;</li>
+<li>consume memory;</li>
+<li>can hide a sustained throughput deficit by increasing latency.</li>
+</ul>
+<p>A buffer is not capacity. It is time.</p>
+<p>Reference: <a href="https://splunk.github.io/splunk-connect-for-syslog/develop/architecture/fine-tuning/">SC4S fine tuning</a></p>
+<h2 id="36-udp-input-windows">36. UDP input windows</h2>
+<p>SC4S exposes UDP input-window tuning.</p>
+<p>Example:</p>
+<pre><code class="language-ini">SC4S_SOURCE_UDP_IW_USE=yes
+SC4S_SOURCE_UDP_IW_SIZE=1000000
+</code></pre>
+<p>This allows syslog-ng to hold more messages in application memory during temporary downstream slowdown.</p>
+<p>It does not increase baseline sustainable throughput.</p>
+<p>Once the window is full, the kernel queue fills next. After that, UDP drops.</p>
+<p>Treat input windows as burst protection.</p>
+<h2 id="37-fetch-limits">37. Fetch limits</h2>
+<p>Fetch limit controls how many events are fetched in a read cycle.</p>
+<p>Examples:</p>
+<pre><code class="language-ini">SC4S_SOURCE_UDP_FETCH_LIMIT=1000
+SC4S_SOURCE_TCP_FETCH_LIMIT=2000
+</code></pre>
+<p>Too low:</p>
+<ul>
+<li>excessive loop overhead;</li>
+<li>underutilized buffers.</li>
+</ul>
+<p>Too high:</p>
+<ul>
+<li>a source can monopolize processing;</li>
+<li>a read can fill too much of the input window.</li>
+</ul>
+<p>Tune it with the window and real workload.</p>
+<h2 id="38-multiple-udp-sockets-and-soreuseport">38. Multiple UDP sockets and <code>SO_REUSEPORT</code></h2>
+<p>SC4S can open multiple sockets on one UDP port.</p>
+<p>Example:</p>
+<pre><code class="language-ini">SC4S_SOURCE_LISTEN_UDP_SOCKETS=32
+</code></pre>
+<p>Without eBPF, Linux generally hashes a flow/source to a socket. This preserves ordering better but can leave one CPU hot when one source dominates traffic.</p>
+<p>This optimization is strongest when many senders contribute traffic.</p>
+<h2 id="39-ebpf-for-a-dominant-udp-stream">39. eBPF for a dominant UDP stream</h2>
+<p>SC4S supports eBPF-assisted distribution for UDP.</p>
+<p>Example:</p>
+<pre><code class="language-ini">SC4S_SOURCE_LISTEN_UDP_SOCKETS=32
+SC4S_ENABLE_EBPF=yes
+SC4S_EBPF_NO_SOCKETS=32
+</code></pre>
+<p>This can distribute packets from a single heavy sender across workers more evenly.</p>
+<p>Trade-off:</p>
+<ul>
+<li>improved parallelism;</li>
+<li>packet processing order can change;</li>
+<li>privileged container requirements;</li>
+<li>more operational complexity.</li>
+</ul>
+<p>SC4S publishes benchmark data showing large improvement under specific lab conditions. Use that as evidence that the feature matters, not as a throughput guarantee for your hardware.</p>
+<p>Reference: <a href="https://splunk.github.io/splunk-connect-for-syslog/develop/architecture/fine-tuning/">SC4S fine tuning</a></p>
+<h2 id="40-tcp-parallelization">40. TCP parallelization</h2>
+<p>A single very busy TCP connection can become a serialization point.</p>
+<p>SC4S supports:</p>
+<pre><code class="language-ini">SC4S_ENABLE_PARALLELIZE=yes
+SC4S_PARALLELIZE_NO_PARTITION=4
+</code></pre>
+<p>This is useful when one TCP stream dominates.</p>
+<p>If you already have many concurrent TCP connections, parallelization can add overhead without meaningful gain.</p>
+<p>Again: benchmark.</p>
+<h2 id="41-hec-workers">41. HEC workers</h2>
+<p>SC4S HEC destinations have worker controls. Current documentation lists ten workers as the default and recommends changing them only for unusually high or low volume with proper testing.</p>
+<p>Example:</p>
+<pre><code class="language-ini">SC4S_DEST_SPLUNK_HEC_DEFAULT_WORKERS=10
+</code></pre>
+<p>Do not automatically set this equal to CPU count. HEC performance depends on:</p>
+<ul>
+<li>indexer capacity;</li>
+<li>latency;</li>
+<li>event size;</li>
+<li>TLS;</li>
+<li>batching;</li>
+<li>disk buffering;</li>
+<li>destination count.</li>
+</ul>
+<h2 id="42-sc4s-lite">42. SC4S Lite</h2>
+<p>Parser evaluation costs CPU.</p>
+<p>If you know exactly which vendors you ingest, SC4S Lite can reduce the parser surface and improve capacity in real workloads.</p>
+<p>This is a useful A/B test when CPU is dominated by classification rather than network I/O.</p>
+<h2 id="43-when-a-dedicated-sc4s-instance-is-justified">43. When a dedicated SC4S instance is justified</h2>
+<p>One SC4S instance can handle many vendors.</p>
+<p>But SC4S documentation recommends considering a dedicated service/host when one source produces a very large percentage of total traffic.</p>
+<p>Good reasons for another instance:</p>
+<ul>
+<li>one dominant high-EPS firewall;</li>
+<li>security-zone separation;</li>
+<li>geographic edge collection;</li>
+<li>different operational ownership;</li>
+<li>different maintenance windows;</li>
+<li>failure-domain isolation;</li>
+<li>a special parser with significant CPU cost.</li>
+</ul>
+<p>Bad reason:</p>
+<pre><code class="language-text">&quot;I need another Splunk index.&quot;
+</code></pre>
+<h2 id="44-front-side-load-balancers-are-not-the-normal-scaling-answer">44. Front-side load balancers are not the normal scaling answer</h2>
+<p>SC4S documentation is intentionally cautious about load balancing <strong>between sources and SC4S</strong>.</p>
+<p>Reasons include:</p>
+<ul>
+<li>source IP can be lost;</li>
+<li>UDP has no session semantics;</li>
+<li>long TCP connections distribute poorly;</li>
+<li>the LB can become another loss point;</li>
+<li>hashing can create uneven load;</li>
+<li>source devices cannot always fail over intelligently.</li>
+</ul>
+<p>Prefer vertical scaling and edge placement first.</p>
+<p>HEC output load balancing is different. SC4S can use a HEC VIP or multiple HEC URLs because HTTP has better request/response behavior.</p>
+<p>Reference: <a href="https://splunk.github.io/splunk-connect-for-syslog/latest/architecture/lb/">SC4S load balancer guidance</a></p>
+<h2 id="45-host-networking">45. Host networking</h2>
+<p>SC4S systemd container examples commonly use:</p>
+<pre><code class="language-text">--network host
+</code></pre>
+<p>Benefits:</p>
+<ul>
+<li>simple listener behavior;</li>
+<li>no NAT/port publishing layer;</li>
+<li>source networking is easier to reason about;</li>
+<li>many ports can be opened without adding <code>-p</code> mappings.</li>
+</ul>
+<p>Cost:</p>
+<ul>
+<li>the container shares the host network namespace;</li>
+<li>port conflicts occur directly on the host;</li>
+<li>network isolation is reduced.</li>
+</ul>
+<p>Reference: <a href="https://docs.docker.com/engine/network/drivers/host/">Docker host network</a></p>
+<h2 id="46-where-macvlan-can-help">46. Where macvlan can help</h2>
+<p><code>macvlan</code> gives a container its own MAC and IP on the physical network.</p>
+<p>Concept:</p>
+<pre><code class="language-text">physical VLAN
+   |
+   +-- SC4S container MAC/IP
+   |
+   +-- other hosts
+</code></pre>
+<p>This can be useful when:</p>
+<ul>
+<li>legacy appliances expect a collector to look like a physical host;</li>
+<li>you want a dedicated collector IP independent of the Docker host IP;</li>
+<li>you need to avoid host-port collisions;</li>
+<li>network policy is based on L2/L3 identity;</li>
+<li>you want multiple collector identities on separate VLANs.</li>
+</ul>
+<p>It can also be useful in advanced migration patterns where old devices cannot easily change destination addressing.</p>
+<p>But macvlan is <strong>not</strong> an SC4S high-throughput magic switch.</p>
+<p>It does not fix:</p>
+<ul>
+<li>CPU-bound regex parsers;</li>
+<li>too-small socket buffers;</li>
+<li>HEC rejection;</li>
+<li>slow Splunk indexers;</li>
+<li>disk-buffer saturation;</li>
+<li>a sender that overloads one TCP stream.</li>
+</ul>
+<p>Reference: <a href="https://docs.docker.com/engine/network/drivers/macvlan/">Docker macvlan</a></p>
+<h2 id="47-macvlan-trade-offs">47. Macvlan trade-offs</h2>
+<p>Docker documents important limitations:</p>
+<ul>
+<li>Linux only;</li>
+<li>often blocked by cloud providers;</li>
+<li>switch/NIC must tolerate multiple MAC addresses/promiscuous behavior;</li>
+<li>too many MACs can create &quot;VLAN spread&quot;;</li>
+<li>macvlan containers cannot communicate directly with the host by default because of a Linux kernel restriction.</li>
+</ul>
+<p>That last point surprises operators.</p>
+<p>A host-side macvlan interface or a second bridge network may be needed if host-to-container communication is required.</p>
+<p>If the environment restricts multiple MAC addresses, consider Docker <code>ipvlan</code>.</p>
+<h2 id="48-macvlan-example-pattern">48. Macvlan example pattern</h2>
+<p>Example only — adapt addresses and parent interface:</p>
+<pre><code class="language-bash">docker network create -d macvlan \
+  --subnet=192.0.2.0/24 \
+  --gateway=192.0.2.1 \
+  -o parent=ens192 \
+  sc4s_l2
+</code></pre>
+<p>Run the container with an assigned address:</p>
+<pre><code class="language-bash">docker run \
+  --network sc4s_l2 \
+  --ip 192.0.2.50 \
+  ...
+</code></pre>
+<p>Before adopting this, validate:</p>
+<pre><code class="language-text">switch port security
+MAC limits
+promiscuous/multiple-MAC support
+VLAN design
+routing
+monitoring access
+HEC egress
+host-to-container requirement
+HA behavior
+</code></pre>
+<p>Macvlan is an architecture tool, not a default deployment recommendation.</p>
+<h2 id="49-high-availability-without-pretending-syslog-becomes-lossless">49. High availability without pretending syslog becomes lossless</h2>
+<p>Syslog HA is difficult because the sender often has the least sophisticated failover logic in the architecture.</p>
+<p>A VIP does not automatically make UDP reliable.</p>
+<p>SC4S documentation discusses HA approaches and warns against conventional front-side load balancing. Modern SC4S guidance includes MicroK8s/MetalLB approaches for specific HA requirements.</p>
+<p>Simpler operational designs can sometimes preserve more data:</p>
+<ul>
+<li>edge collectors;</li>
+<li>VM HA/vMotion;</li>
+<li>redundant source destinations when the appliance supports them;</li>
+<li>sender-side TCP/TLS with internal queues;</li>
+<li>fast collector recovery;</li>
+<li>adequate local HEC disk buffer;</li>
+<li>configuration-as-code to rebuild quickly.</li>
+</ul>
+<p>Define the failure you are trying to survive before selecting an HA product.</p>
+<h2 id="50-archive-is-different-from-disk-buffer">50. Archive is different from disk buffer</h2>
+<p>Disk buffer is temporary delivery resilience.</p>
+<p>Archive is intentional local retention.</p>
+<p>SC4S supports archive output and documents compliance/diode modes.</p>
+<p>If you enable archive:</p>
+<ul>
+<li>size the filesystem;</li>
+<li>implement rotation;</li>
+<li>monitor capacity;</li>
+<li>define retention;</li>
+<li>secure the files;</li>
+<li>understand that SC4S does not automatically prune them for you.</li>
+</ul>
+<p>Do not call the disk buffer an archive.</p>
+<h2 id="51-timezones">51. Timezones</h2>
+<p>Avoid a global timezone setting copied from a forum.</p>
+<p><code>SC4S_DEFAULT_TIMEZONE</code> applies to events that lack a usable timezone.</p>
+<p>If a source already sends:</p>
+<pre><code class="language-text">tz=&quot;+0330&quot;
+</code></pre>
+<p>that information should drive event time.</p>
+<p>A global timezone override is appropriate only when you know the affected legacy sources share that timezone.</p>
+<p>Check:</p>
+<pre><code class="language-spl">index=&lt;index&gt;
+| eval ingest_delay=_indextime-_time
+| stats avg(ingest_delay) max(ingest_delay) by sourcetype
+</code></pre>
+<p>Large positive/negative delays can reveal timestamp mistakes.</p>
+<h2 id="52-a-layered-troubleshooting-methodology">52. A layered troubleshooting methodology</h2>
+<p>Never start by restarting everything.</p>
+<p>Follow the event.</p>
+<h3 id="layer-1-sender">Layer 1 — sender</h3>
+<p>Questions:</p>
+<ul>
+<li>Is logging enabled?</li>
+<li>Correct destination IP?</li>
+<li>Correct port?</li>
+<li>Correct protocol?</li>
+<li>Correct facility/severity filters?</li>
+<li>Does the sender maintain a queue?</li>
+<li>Does it report drops?</li>
+</ul>
+<h3 id="layer-2-network">Layer 2 — network</h3>
+<pre><code class="language-bash">tcpdump -ni any host &lt;SOURCE_IP&gt; and port &lt;PORT&gt;
+</code></pre>
+<p>If no packets/connection arrive, SC4S is not the problem yet.</p>
+<h3 id="layer-3-listener">Layer 3 — listener</h3>
+<p>UDP:</p>
+<pre><code class="language-bash">ss -lunp | grep ':5514'
+</code></pre>
+<p>TCP:</p>
+<pre><code class="language-bash">ss -lntp | grep ':1514'
+</code></pre>
+<p>If <code>tcpdump</code> sees packets but no process owns the port, fix listener configuration.</p>
+<h3 id="layer-4-sc4s-source-counters">Layer 4 — SC4S source counters</h3>
+<pre><code class="language-bash">docker exec SC4S syslog-ng-ctl stats
+</code></pre>
+<p>Compare counters before and after a controlled event.</p>
+<h3 id="layer-5-classification">Layer 5 — classification</h3>
+<p>Search SC4S logs and Splunk indexed <code>sc4s_*</code> fields:</p>
+<pre><code class="language-spl">index=* sc4s_fromhostip=&quot;&lt;SOURCE_IP&gt;&quot;
+| stats count by sc4s_vendor sc4s_product sourcetype index
+</code></pre>
+<h3 id="layer-6-hec">Layer 6 — HEC</h3>
+<pre><code class="language-bash">curl --cacert /opt/sc4s/tls/trusted.pem \
+  https://splunk-hec.example.net:8088/services/collector/health
+</code></pre>
+<p>Test the exact destination index:</p>
+<pre><code class="language-bash">curl --fail-with-body \
+  --cacert /opt/sc4s/tls/trusted.pem \
+  -H &quot;Authorization: Splunk $HEC_TOKEN&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  https://splunk-hec.example.net:8088/services/collector/event \
+  -d '{&quot;index&quot;:&quot;fgt&quot;,&quot;event&quot;:&quot;hec-index-test&quot;}'
+</code></pre>
+<h3 id="layer-7-splunk-parsing">Layer 7 — Splunk parsing</h3>
+<pre><code class="language-spl">index=&lt;target&gt; host=&lt;host&gt;
+| table _time _indextime index host source sourcetype _raw
+</code></pre>
+<p>Then validate field extraction.</p>
+<h2 id="53-common-failure-incorrect-index">53. Common failure: &quot;Incorrect index&quot;</h2>
+<p>SC4S log:</p>
+<pre><code class="language-text">status_code='400'
+response='{&quot;text&quot;:&quot;Incorrect index&quot;,&quot;code&quot;:7}'
+</code></pre>
+<p>Check:</p>
+<ol>
+<li>Does the event payload explicitly contain <code>&quot;index&quot;:&quot;...&quot;</code>?</li>
+<li>Does that index exist?</li>
+<li>Is the index allowed by the HEC token?</li>
+<li>Was the HEC configuration reloaded/restarted as required?</li>
+<li>Did SC4S metadata override load?</li>
+<li>Is another event in the same HEC batch using a different unauthorized index?</li>
+</ol>
+<p>Do not assume the <code>index =</code> default in <code>inputs.conf</code> forces SC4S events into that index.</p>
+<h2 id="54-common-failure-sc4sevents-shows-dropped-batches">54. Common failure: <code>sc4s:events</code> shows dropped batches</h2>
+<p>An internal event may show:</p>
+<pre><code class="language-text">Message(s) dropped while sending message to destination
+</code></pre>
+<p>and the displayed HEC request may itself use <code>index=main</code>.</p>
+<p>Do not conclude that <code>main</code> is invalid.</p>
+<p>Look for:</p>
+<pre><code class="language-text">invalid-event-number
+batch_size
+</code></pre>
+<p>The invalid event can be another member of the batch.</p>
+<p>This is why HEC allow-list governance must track every SC4S destination index.</p>
+<h2 id="55-common-failure-packet-visible-in-tcpdump-nothing-in-splunk">55. Common failure: packet visible in tcpdump, nothing in Splunk</h2>
+<p>Checklist:</p>
+<pre><code class="language-bash">ss -lunp
+ss -lntp
+docker exec SC4S syslog-ng-ctl healthcheck --timeout 5
+docker exec SC4S syslog-ng-ctl stats
+docker logs --since 10m SC4S
+netstat -su
+</code></pre>
+<p>Then:</p>
+<ul>
+<li>confirm correct protocol;</li>
+<li>confirm listener port;</li>
+<li>confirm firewall;</li>
+<li>confirm classification;</li>
+<li>confirm HEC destination counters.</li>
+</ul>
+<p><code>tcpdump</code> is only one layer.</p>
+<h2 id="56-common-failure-json-becomes-raw-text">56. Common failure: JSON becomes &quot;raw text&quot;</h2>
+<p>Capture one event before and after SC4S.</p>
+<p>Check <code>_raw</code>.</p>
+<p>If it changed from:</p>
+<pre><code class="language-json">{&quot;event&quot;:&quot;...&quot;}
+</code></pre>
+<p>to:</p>
+<pre><code class="language-text">timestamp host program: {&quot;event&quot;:&quot;...&quot;}
+</code></pre>
+<p>use an appropriate template such as:</p>
+<pre><code class="language-csv">vendor_product,sc4s_template,t_msg_trim
+</code></pre>
+<p>provided the JSON is the syslog message body.</p>
+<p>Then verify:</p>
+<pre><code class="language-spl">index=&lt;index&gt; sourcetype=&lt;sourcetype&gt;
+| spath
+| fieldsummary
+</code></pre>
+<p>If the sender transmits raw JSON with <strong>no syslog envelope</strong>, SIMPLE is the wrong abstraction. Use a dedicated custom/no-parse path or retain direct ingestion.</p>
+<h2 id="57-common-failure-tls-warning-or-certificate-mismatch">57. Common failure: TLS warning or certificate mismatch</h2>
+<p>Validate independently of SC4S:</p>
+<pre><code class="language-bash">openssl s_client \
+  -connect splunk-hec.example.net:8088 \
+  -showcerts &lt;/dev/null
+</code></pre>
+<p>Then:</p>
+<pre><code class="language-bash">curl --cacert /opt/sc4s/tls/trusted.pem \
+  https://splunk-hec.example.net:8088/services/collector/health
+</code></pre>
+<p>The trust file should normally contain the issuing CA chain, not a casually copied server private-key bundle.</p>
+<p>Certificate identity must match the hostname or IP used in the URL.</p>
+<h2 id="58-common-failure-sc4s-cannot-restart-in-an-air-gap">58. Common failure: SC4S cannot restart in an air gap</h2>
+<p>If systemd contains:</p>
+<pre><code class="language-text">docker pull ghcr.io/...
+</code></pre>
+<p>every restart depends on internet access.</p>
+<p>Fix the lifecycle:</p>
+<pre><code class="language-text">local approved image
++ no pull pre-step
++ --pull=never
+</code></pre>
+<p>Check effective service:</p>
+<pre><code class="language-bash">systemctl cat sc4s
+systemctl show sc4s -p ExecStart -p ExecStartPre -p Environment
+</code></pre>
+<h2 id="59-common-failure-listener-port-missing-after-restart">59. Common failure: listener port missing after restart</h2>
+<p>Check env syntax:</p>
+<pre><code class="language-bash">grep -nEv \
+'^[[:space:]]*($|#|[A-Za-z_][A-Za-z0-9_]*=.*)$' \
+/opt/sc4s/env_file
+</code></pre>
+<p>Check actual container environment:</p>
+<pre><code class="language-bash">docker inspect SC4S \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep '^SC4S_LISTEN'
+</code></pre>
+<p>Check generated config where useful:</p>
+<pre><code class="language-bash">docker exec SC4S \
+  syslog-ng-ctl config --preprocessed \
+  | grep -n -C 5 '&lt;PORT&gt;'
+</code></pre>
+<p>Check for port collisions.</p>
+<h2 id="60-common-failure-disk-buffer-does-not-drain">60. Common failure: disk buffer does not drain</h2>
+<p>Determine whether the destination is actually healthy:</p>
+<pre><code class="language-bash">curl ...
+</code></pre>
+<p>Then inspect:</p>
+<pre><code class="language-bash">docker exec SC4S syslog-ng-ctl stats
+df -h
+iostat -xz 1
+</code></pre>
+<p>A buffer drains only if:</p>
+<pre><code class="language-text">current output capacity &gt; incoming rate
+</code></pre>
+<p>If new events arrive at 40k EPS and the recovered path can forward only 35k EPS, the queue cannot shrink.</p>
+<h2 id="61-performance-testing">61. Performance testing</h2>
+<p>SC4S recommends testing your own workload.</p>
+<p>The project uses <code>loggen</code> for synthetic benchmarks.</p>
+<p>UDP concept:</p>
+<pre><code class="language-bash">loggen \
+  --interval 60 \
+  --rate 27000 \
+  -s 1000 \
+  --no-framing \
+  --dgram \
+  &lt;SC4S_IP&gt; 514
+</code></pre>
+<p>Measure:</p>
+<ul>
+<li>sent count;</li>
+<li>SC4S received count;</li>
+<li>Splunk indexed count;</li>
+<li>latency;</li>
+<li>kernel receive errors;</li>
+<li>CPU;</li>
+<li>memory;</li>
+<li>HEC queue;</li>
+<li>disk-buffer behavior.</li>
+</ul>
+<p>A throughput number without loss and latency measurements is incomplete.</p>
+<p>Reference: <a href="https://splunk.github.io/splunk-connect-for-syslog/develop/architecture/performance-tests/">SC4S performance tests</a></p>
+<h2 id="62-outage-testing">62. Outage testing</h2>
+<p>Do not claim that disk buffering works because it is enabled.</p>
+<p>Test it.</p>
+<ol>
+<li>Record counters.</li>
+<li>Block all HEC destinations.</li>
+<li>Generate numbered TCP events.</li>
+<li>Confirm queue/disk growth.</li>
+<li>Restart SC4S while Splunk remains unreachable.</li>
+<li>Restore HEC.</li>
+<li>Confirm the queue drains.</li>
+<li>Count the numbered events in Splunk.</li>
+<li>Check duplicates.</li>
+<li>Check <code>dropped</code> delta.</li>
+</ol>
+<p>For UDP sources, use a reliable test generator for the buffering test so sender-side UDP loss does not contaminate the result.</p>
+<h2 id="63-security-hardening">63. Security hardening</h2>
+<h3 id="network">Network</h3>
+<p>Permit only required flows:</p>
+<pre><code class="language-text">sources -&gt; SC4S listener ports
+SC4S -&gt; HEC 8088
+monitoring -&gt; SC4S status if required
+administration -&gt; SSH
+</code></pre>
+<p>Do not expose generic syslog listeners to untrusted networks.</p>
+<h3 id="tls">TLS</h3>
+<p>Use TLS for:</p>
+<ul>
+<li>HEC;</li>
+<li>source syslog where the device supports it and operational constraints allow it.</li>
+</ul>
+<h3 id="secrets">Secrets</h3>
+<p>Restrict <code>env_file</code>.</p>
+<p>Rotate exposed tokens.</p>
+<h3 id="container">Container</h3>
+<ul>
+<li>pin an approved version/digest;</li>
+<li>avoid <code>latest</code> in controlled production;</li>
+<li>use least privilege consistent with required features;</li>
+<li>document when <code>--privileged</code> is introduced for eBPF.</li>
+</ul>
+<h3 id="host">Host</h3>
+<ul>
+<li>patch OS/runtime;</li>
+<li>use NTP;</li>
+<li>monitor disk;</li>
+<li>protect <code>/opt/sc4s</code>;</li>
+<li>audit service/config changes.</li>
+</ul>
+<h3 id="parser-safety">Parser safety</h3>
+<p>Regex is executable workload.</p>
+<p>A pathological pattern can become a denial-of-service vector at high EPS.</p>
+<p>Keep filters narrow and benchmark them.</p>
+<h2 id="64-change-management">64. Change management</h2>
+<p>Treat SC4S metadata as production code.</p>
+<p>Store sanitized configuration in Git:</p>
+<pre><code class="language-text">sc4s/
+  env_file.example
+  context/
+    splunk_metadata.csv
+    compliance_meta_by_source.conf
+    compliance_meta_by_source.csv
+  config/
+    filters/
+    log_paths/
+  systemd/
+    sc4s.service
+  tests/
+</code></pre>
+<p>Never store real tokens.</p>
+<p>For each change record:</p>
+<ul>
+<li>SC4S version;</li>
+<li>source vendor/model;</li>
+<li>firmware version;</li>
+<li>sample sanitized raw event;</li>
+<li>expected index;</li>
+<li>expected sourcetype;</li>
+<li>expected host;</li>
+<li>expected timestamp;</li>
+<li>expected fields;</li>
+<li>HEC indexes authorization;</li>
+<li>rollback.</li>
+</ul>
+<h2 id="65-upgrade-strategy">65. Upgrade strategy</h2>
+<p>Before an SC4S upgrade:</p>
+<ol>
+<li>Read release notes.</li>
+<li>Record current image digest.</li>
+<li>Save current local overrides.</li>
+<li>Compare <code>splunk_metadata.csv.example</code>.</li>
+<li>Check parser/source documentation for your vendors.</li>
+<li>Test in non-production.</li>
+<li>Re-run representative samples.</li>
+<li>Re-run outage/buffer tests if the runtime/syslog engine changed.</li>
+<li>Validate CPU and memory under load.</li>
+<li>Keep the previous image locally for rollback in an air gap.</li>
+</ol>
+<p>As of August 2026, the project is actively releasing SC4S 3.x. Do not assume parser internals are static.</p>
+<h2 id="66-operational-acceptance-checklist">66. Operational acceptance checklist</h2>
+<p>Before onboarding a source:</p>
+<ul>
+<li>index created;</li>
+<li>index authorized in HEC;</li>
+<li>HEC manual event succeeds;</li>
+<li>source documentation checked;</li>
+<li>correct protocol selected;</li>
+<li>correct listener active;</li>
+<li>metadata key verified against <code>.example</code>;</li>
+<li>raw event captured;</li>
+<li>sourcetype matches downstream TA;</li>
+<li>template preserves expected raw shape;</li>
+<li>timestamp verified;</li>
+<li>field extraction verified;</li>
+<li>HEC <code>dropped</code> counter not increasing;</li>
+<li>disk buffer capacity sufficient;</li>
+<li>monitoring alert configured.</li>
+</ul>
+<p>Before declaring SC4S production-ready:</p>
+<ul>
+<li>service enabled at boot;</li>
+<li>offline image lifecycle tested where applicable;</li>
+<li>OS reboot tested;</li>
+<li>HEC outage tested;</li>
+<li>Splunk endpoint failover tested;</li>
+<li>disk-full warning threshold defined;</li>
+<li>source-side UDP loss monitored;</li>
+<li>configuration backed by source control;</li>
+<li>secrets excluded from source control;</li>
+<li>rollback documented.</li>
+</ul>
+<h2 id="67-when-not-to-use-sc4s">67. When not to use SC4S</h2>
+<p>SC4S is not automatically the right answer for every input.</p>
+<p>Do not force a source through SC4S when:</p>
+<ul>
+<li>the vendor has a robust native Splunk integration that already provides durable delivery;</li>
+<li>the source is not syslog-like and SC4S would only wrap/unwrap data pointlessly;</li>
+<li>a mandatory enterprise collector already provides equivalent parsing, durability, and Splunk metadata;</li>
+<li>you require durable raw-file retention as the primary system of record and a file-first syslog architecture is simpler;</li>
+<li>the environment cannot operate the container/networking requirements safely.</li>
+</ul>
+<p>The goal is reliable observability, not architectural purity.</p>
+<h2 id="68-a-practical-decision-matrix">68. A practical decision matrix</h2>
+<table>
+<thead>
+<tr>
+  <th>Requirement</th>
+  <th style="text-align:right">SC4S</th>
+  <th style="text-align:right">Plain syslog-ng</th>
+  <th style="text-align:right">HF syslog input</th>
+  <th style="text-align:right">syslog-ng + UF</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>Splunk-oriented vendor metadata</td>
+  <td style="text-align:right">Strong</td>
+  <td style="text-align:right">Build yourself</td>
+  <td style="text-align:right">Build in Splunk</td>
+  <td style="text-align:right">Split responsibility</td>
+</tr>
+<tr>
+  <td>HEC-native output</td>
+  <td style="text-align:right">Strong</td>
+  <td style="text-align:right">Possible</td>
+  <td style="text-align:right">N/A as receiver</td>
+  <td style="text-align:right">No</td>
+</tr>
+<tr>
+  <td>Persistent output buffer</td>
+  <td style="text-align:right">Strong</td>
+  <td style="text-align:right">Strong</td>
+  <td style="text-align:right">Splunk queues</td>
+  <td style="text-align:right">Strong via files</td>
+</tr>
+<tr>
+  <td>Source catalog</td>
+  <td style="text-align:right">Strong</td>
+  <td style="text-align:right">No Splunk-specific catalog</td>
+  <td style="text-align:right">TAs/transforms</td>
+  <td style="text-align:right">TAs/transforms</td>
+</tr>
+<tr>
+  <td>Arbitrary transformation</td>
+  <td style="text-align:right">Strong but opinionated</td>
+  <td style="text-align:right">Maximum</td>
+  <td style="text-align:right">Strong</td>
+  <td style="text-align:right">Strong</td>
+</tr>
+<tr>
+  <td>Raw file durability</td>
+  <td style="text-align:right">Optional archive</td>
+  <td style="text-align:right">Strong</td>
+  <td style="text-align:right">Weak fit</td>
+  <td style="text-align:right">Strong</td>
+</tr>
+<tr>
+  <td>Operational simplicity for many syslog vendors</td>
+  <td style="text-align:right">Strong</td>
+  <td style="text-align:right">Depends on expertise</td>
+  <td style="text-align:right">Degrades at scale</td>
+  <td style="text-align:right">Moderate</td>
+</tr>
+<tr>
+  <td>Air-gap operation</td>
+  <td style="text-align:right">Yes with image lifecycle</td>
+  <td style="text-align:right">Yes</td>
+  <td style="text-align:right">Yes</td>
+  <td style="text-align:right">Yes</td>
+</tr>
+<tr>
+  <td>High-EPS tuning</td>
+  <td style="text-align:right">Strong controls</td>
+  <td style="text-align:right">Maximum controls</td>
+  <td style="text-align:right">Different model</td>
+  <td style="text-align:right">Strong</td>
+</tr>
+<tr>
+  <td>Native Splunk S2S</td>
+  <td style="text-align:right">No, uses HEC</td>
+  <td style="text-align:right">No</td>
+  <td style="text-align:right">Yes</td>
+  <td style="text-align:right">UF yes</td>
+</tr>
+</tbody>
+</table>
+<h2 id="69-a-reference-architecture-for-a-mixed-security-estate">69. A reference architecture for a mixed security estate</h2>
+<pre><code class="language-text">                         Security / Network Sources
+                 +--------------+--------------+
+                 |              |              |
+             FortiGate        Cisco           DLP
+             UDP/TCP          TCP/TLS         TCP
+                 \              |              /
+                  \             |             /
+                   +------------v------------+
+                   |          SC4S           |
+                   |                         |
+                   | listeners               |
+                   | source identification   |
+                   | vendor parsers          |
+                   | metadata overrides      |
+                   | templates               |
+                   | disk buffering          |
+                   +------------+------------+
+                                |
+                                | HTTPS HEC
+                                v
+                       +--------+--------+
+                       | HEC VIP/indexers|
+                       +--------+--------+
+                                |
+                         Splunk indexers
+                                |
+                      +---------+---------+
+                      |         |         |
+                     fgt        av       dlp
+                    index     index     index
+</code></pre>
+<p>The ports are transport decisions.</p>
+<p>The indexes are metadata/governance decisions.</p>
+<p>The HEC endpoint is the delivery mechanism.</p>
+<p>SC4S connects those decisions without making them the same thing.</p>
+<h2 id="70-the-operational-lesson">70. The operational lesson</h2>
+<p>The biggest SC4S mistakes are rarely syntax mistakes.</p>
+<p>They are mental-model mistakes:</p>
+<ul>
+<li>assuming the HEC default index overrides event metadata;</li>
+<li>assuming a healthy process means healthy data;</li>
+<li>assuming TCP means no loss;</li>
+<li>assuming a disk buffer protects the sender-to-collector path;</li>
+<li>assuming an index name in SC4S is mandatory;</li>
+<li>assuming a dedicated port automatically identifies a vendor;</li>
+<li>assuming a message that looks like JSON somewhere in the path still reaches Splunk as pure JSON;</li>
+<li>assuming adding more collectors behind a load balancer automatically improves syslog availability.</li>
+</ul>
+<p>Once you separate transport, framing, parsing, metadata, buffering, and destination authorization, SC4S becomes much easier to reason about.</p>
+<p>That is the real value of the platform: not that it removes syslog engineering, but that it gives that engineering a consistent structure.</p>
+<h2 id="71-command-reference">71. Command reference</h2>
+<h3 id="service">Service</h3>
+<pre><code class="language-bash">systemctl status sc4s --no-pager -l
+systemctl enable sc4s
+systemctl restart sc4s
+journalctl -u sc4s --since &quot;10 minutes ago&quot; --no-pager
+</code></pre>
+<h3 id="container">Container</h3>
+<pre><code class="language-bash">docker ps --filter name=SC4S
+docker logs --tail 200 SC4S
+docker inspect SC4S
+</code></pre>
+<h3 id="health">Health</h3>
+<pre><code class="language-bash">docker exec SC4S \
+  syslog-ng-ctl healthcheck --timeout 5
+</code></pre>
+<h3 id="statistics">Statistics</h3>
+<pre><code class="language-bash">docker exec SC4S syslog-ng-ctl stats
+docker exec SC4S syslog-ng-ctl stats \
+  | grep 'dst.http;d_hec_fmt'
+</code></pre>
+<h3 id="ports">Ports</h3>
+<pre><code class="language-bash">ss -lunp
+ss -lntp
+</code></pre>
+<h3 id="packets">Packets</h3>
+<pre><code class="language-bash">tcpdump -ni any -s0 -A 'udp port 5514'
+tcpdump -ni any -s0 -A 'tcp port 1514'
+</code></pre>
+<h3 id="udp-kernel-health">UDP kernel health</h3>
+<pre><code class="language-bash">netstat -su
+</code></pre>
+<h3 id="effective-sc4s-environment">Effective SC4S environment</h3>
+<pre><code class="language-bash">docker inspect SC4S \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | sort
+</code></pre>
+<h3 id="preprocessed-syslog-ng-config">Preprocessed syslog-ng config</h3>
+<pre><code class="language-bash">docker exec SC4S \
+  syslog-ng-ctl config --preprocessed
+</code></pre>
+<h3 id="hec-health">HEC health</h3>
+<pre><code class="language-bash">curl --cacert /opt/sc4s/tls/trusted.pem \
+  https://splunk-hec.example.net:8088/services/collector/health
+</code></pre>
+<h3 id="splunk-hec-effective-input">Splunk HEC effective input</h3>
+<pre><code class="language-bash">/opt/splunk/bin/splunk btool inputs list --debug
+</code></pre>
+<h3 id="sc4s-event-health-search">SC4S event health search</h3>
+<pre><code class="language-spl">index=main sourcetype=&quot;sc4s:events&quot;
+| sort - _time
+</code></pre>
+<h3 id="source-classification">Source classification</h3>
+<pre><code class="language-spl">index=* sc4s_fromhostip=&quot;&lt;SOURCE_IP&gt;&quot;
+| stats count by index sourcetype sc4s_vendor sc4s_product sc4s_proto
+</code></pre>
+<h3 id="ingestion-delay">Ingestion delay</h3>
+<pre><code class="language-spl">index=&lt;index&gt;
+| eval ingest_delay=_indextime-_time
+| stats count avg(ingest_delay) max(ingest_delay) by sourcetype
+</code></pre>
+<h3 id="downloadable-sanitized-examples">Downloadable, sanitized examples</h3>
+<p>These files use documentation-only addresses and deployment placeholders. Review every value against the SC4S release you run before using them:</p>
+<ul>
+<li><a href="/examples/sc4s/env_file.example">SC4S <code>env_file</code> example</a></li>
+<li><a href="/examples/sc4s/hec-inputs.conf.example">Splunk HEC <code>inputs.conf</code> example</a></li>
+<li><a href="/examples/sc4s/splunk_metadata.csv">SC4S metadata overrides</a></li>
+<li><a href="/examples/sc4s/troubleshoot-sc4s.sh">Read-only troubleshooting script</a></li>
+<li><a href="/examples/sc4s/sc4s.service.offline.example">Offline systemd unit example</a></li>
+<li><a href="/examples/sc4s/macvlan-example.sh">Optional macvlan example</a></li>
+</ul>
+<h2 id="72-further-reading">72. Further reading</h2>
+<h3 id="sc4s">SC4S</h3>
+<ul>
+<li><a href="https://github.com/splunk/splunk-connect-for-syslog">SC4S GitHub repository</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/main/">SC4S documentation</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/main/architecture/">Architecture considerations</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/main/gettingstarted/quickstart_guide/">Quickstart</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/main/gettingstarted/getting-started-splunk-setup/">Splunk setup for SC4S</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/main/gettingstarted/getting-started-runtime-configuration/">Runtime configuration</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/main/configuration/">Configuration reference</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/main/destinations/">Destinations</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/main/sources/simple/">SIMPLE sources</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/main/sources/base/cef/">CEF sources</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/main/sources/vendor/Fortinet/fortios/">Fortinet FortiOS</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/develop/creating_parsers/">Parser development</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/develop/creating_parsers/filter_message/">Filter development</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/develop/creating_parsers/parse_message/">Parser message handling</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/develop/architecture/fine-tuning/">Fine tuning</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/develop/architecture/performance-tests/">Performance tests</a></li>
+<li><a href="https://splunk.github.io/splunk-connect-for-syslog/latest/architecture/lb/">Load balancer considerations</a></li>
+<li><a href="https://github.com/splunk/splunk-connect-for-syslog/releases">SC4S releases</a></li>
+</ul>
+<h3 id="syslog-engine-axosyslog">Syslog engine / AxoSyslog</h3>
+<ul>
+<li><a href="https://axoflow.com/docs/axosyslog-core/chapter-manipulating-messages/customizing-message-format/configuring-macros/">Templates and macros</a></li>
+<li><a href="https://axoflow.com/docs/axosyslog-core/chapter-manipulating-messages/">Message manipulation</a></li>
+<li><a href="https://axoflow.com/docs/axosyslog-core/chapter-manipulating-messages/modifying-messages/">Rewrite rules</a></li>
+<li><a href="https://axoflow.com/docs/axosyslog-core/chapter-parsers/parser-regexp/">Regex parser</a></li>
+<li><a href="https://axoflow.com/docs/axosyslog-core/chapter-parsers/parser-syslog/">Syslog parsing</a></li>
+</ul>
+<h3 id="docker-networking">Docker networking</h3>
+<ul>
+<li><a href="https://docs.docker.com/engine/network/drivers/host/">Docker host network</a></li>
+<li><a href="https://docs.docker.com/engine/network/drivers/macvlan/">Docker macvlan</a></li>
+<li><a href="https://docs.docker.com/engine/network/drivers/">Docker network drivers</a></li>
+</ul>
+<h3 id="vendor-integration">Vendor integration</h3>
+<ul>
+<li><a href="https://www.bitdefender.com/business/support/en/77212-171475-splunk.html">Bitdefender GravityZone Splunk integration</a></li>
+</ul>
+<h3 id="github-pages">GitHub Pages</h3>
+<ul>
+<li><a href="https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-github-pages-site">GitHub Pages site creation</a></li>
+</ul>
+<hr />
+<h3 id="closing-note">Closing note</h3>
+<p>A collector should be uneventful during normal operation and precise when something fails.</p>
+<p>The goal is not to create the most clever syslog configuration. It is to create a path where you can explain, with evidence, what happened to an event at every boundary: the sender, the network, the Linux socket, SC4S classification, metadata, queue, HEC request, Splunk index, and final field extraction.</p>
+<p>In practice, I work through those boundaries in the same order used throughout this guide: packet, socket, parser, metadata, queue, HEC request, index, and fields. If I cannot show what happened at one of them, the pipeline is not ready for production.</p>
+</div></article>
+<aside class="toc" aria-label="Table of contents"><h2>Contents</h2><ol><li><a href="#1-why-this-guide-exists">1. Why this guide exists</a></li>
+<li><a href="#2-first-principles-syslog-is-a-transport-family-not-a-data-model">2. First principles: syslog is a transport family, not a data model</a></li>
+<li><a href="#3-what-sc4s-actually-does-in-the-pipeline">3. What SC4S actually does in the pipeline</a></li>
+<li><a href="#4-where-sc4s-belongs-in-a-splunk-architecture">4. Where SC4S belongs in a Splunk architecture</a></li>
+<li><a href="#5-sc4s-versus-the-common-alternatives">5. SC4S versus the common alternatives</a></li>
+<li><a href="#6-benefits-and-costs">6. Benefits and costs</a></li>
+<li><a href="#7-edge-collection-beats-centralizing-everything">7. Edge collection beats centralizing everything</a></li>
+<li><a href="#8-udp-tcp-rfc6587-and-tls-reliability-without-mythology">8. UDP, TCP, RFC6587, and TLS: reliability without mythology</a></li>
+<li><a href="#9-a-practical-production-architecture">9. A practical production architecture</a></li>
+<li><a href="#10-one-hec-token-many-indexes">10. One HEC token, many indexes</a></li>
+<li><a href="#11-why-sc4s-ships-with-netfw-netops-netdlp-and-similar-indexes">11. Why SC4S ships with netfw, netops, netdlp, and similar indexes</a></li>
+<li><a href="#12-the-metadata-override-model">12. The metadata override model</a></li>
+<li><a href="#13-example-override-fortigate-into-your-own-index">13. Example: override FortiGate into your own index</a></li>
+<li><a href="#14-sourcetype-overrides-are-more-dangerous-than-index-overrides">14. Sourcetype overrides are more dangerous than index overrides</a></li>
+<li><a href="#15-simple-sources-the-fast-onboarding-bridge">15. SIMPLE sources: the fast onboarding bridge</a></li>
+<li><a href="#16-why-json-can-stop-parsing-after-sc4s-is-inserted">16. Why JSON can stop parsing after SC4S is inserted</a></li>
+<li><a href="#17-built-in-output-templates-you-should-understand">17. Built-in output templates you should understand</a></li>
+<li><a href="#18-preserve-raw-first-normalize-second">18. Preserve raw first, normalize second</a></li>
+<li><a href="#19-creating-your-own-sc4s-log-path">19. Creating your own SC4S log path</a></li>
+<li><a href="#20-parser-design-identify-narrowly">20. Parser design: identify narrowly</a></li>
+<li><a href="#21-rewriting-and-trimming-raw-messages">21. Rewriting and trimming raw messages</a></li>
+<li><a href="#22-extracting-fields-with-regex">22. Extracting fields with regex</a></li>
+<li><a href="#23-templates-give-you-control-over-the-final-splunk-raw">23. Templates give you control over the final Splunk raw</a></li>
+<li><a href="#24-conditional-metadata-by-host-ip-subnet-or-compliance-scope">24. Conditional metadata by host, IP, subnet, or compliance scope</a></li>
+<li><a href="#25-disk-buffering-what-it-protects-and-what-it-cannot-protect">25. Disk buffering: what it protects and what it cannot protect</a></li>
+<li><a href="#26-http-400-is-different-from-an-outage">26. HTTP 400 is different from an outage</a></li>
+<li><a href="#27-monitoring-the-hec-destination">27. Monitoring the HEC destination</a></li>
+<li><a href="#28-sc4s-health-is-not-the-same-as-data-health">28. SC4S health is not the same as data health</a></li>
+<li><a href="#29-the-status-endpoint-on-tcp8080">29. The status endpoint on TCP/8080</a></li>
+<li><a href="#30-air-gapped-deployment">30. Air-gapped deployment</a></li>
+<li><a href="#31-baseline-host-preparation">31. Baseline host preparation</a></li>
+<li><a href="#32-a-clean-envfile-baseline">32. A clean envfile baseline</a></li>
+<li><a href="#33-secrets">33. Secrets</a></li>
+<li><a href="#34-high-load-ingestion-find-the-actual-bottleneck-first">34. High-load ingestion: find the actual bottleneck first</a></li>
+<li><a href="#35-receive-buffer-tuning">35. Receive-buffer tuning</a></li>
+<li><a href="#36-udp-input-windows">36. UDP input windows</a></li>
+<li><a href="#37-fetch-limits">37. Fetch limits</a></li>
+<li><a href="#38-multiple-udp-sockets-and-soreuseport">38. Multiple UDP sockets and SOREUSEPORT</a></li>
+<li><a href="#39-ebpf-for-a-dominant-udp-stream">39. eBPF for a dominant UDP stream</a></li>
+<li><a href="#40-tcp-parallelization">40. TCP parallelization</a></li>
+<li><a href="#41-hec-workers">41. HEC workers</a></li>
+<li><a href="#42-sc4s-lite">42. SC4S Lite</a></li>
+<li><a href="#43-when-a-dedicated-sc4s-instance-is-justified">43. When a dedicated SC4S instance is justified</a></li>
+<li><a href="#44-front-side-load-balancers-are-not-the-normal-scaling-answer">44. Front-side load balancers are not the normal scaling answer</a></li>
+<li><a href="#45-host-networking">45. Host networking</a></li>
+<li><a href="#46-where-macvlan-can-help">46. Where macvlan can help</a></li>
+<li><a href="#47-macvlan-trade-offs">47. Macvlan trade-offs</a></li>
+<li><a href="#48-macvlan-example-pattern">48. Macvlan example pattern</a></li>
+<li><a href="#49-high-availability-without-pretending-syslog-becomes-lossless">49. High availability without pretending syslog becomes lossless</a></li>
+<li><a href="#50-archive-is-different-from-disk-buffer">50. Archive is different from disk buffer</a></li>
+<li><a href="#51-timezones">51. Timezones</a></li>
+<li><a href="#52-a-layered-troubleshooting-methodology">52. A layered troubleshooting methodology</a></li>
+<li><a href="#53-common-failure-incorrect-index">53. Common failure: &quot;Incorrect index&quot;</a></li>
+<li><a href="#54-common-failure-sc4sevents-shows-dropped-batches">54. Common failure: sc4s:events shows dropped batches</a></li>
+<li><a href="#55-common-failure-packet-visible-in-tcpdump-nothing-in-splunk">55. Common failure: packet visible in tcpdump, nothing in Splunk</a></li>
+<li><a href="#56-common-failure-json-becomes-raw-text">56. Common failure: JSON becomes &quot;raw text&quot;</a></li>
+<li><a href="#57-common-failure-tls-warning-or-certificate-mismatch">57. Common failure: TLS warning or certificate mismatch</a></li>
+<li><a href="#58-common-failure-sc4s-cannot-restart-in-an-air-gap">58. Common failure: SC4S cannot restart in an air gap</a></li>
+<li><a href="#59-common-failure-listener-port-missing-after-restart">59. Common failure: listener port missing after restart</a></li>
+<li><a href="#60-common-failure-disk-buffer-does-not-drain">60. Common failure: disk buffer does not drain</a></li>
+<li><a href="#61-performance-testing">61. Performance testing</a></li>
+<li><a href="#62-outage-testing">62. Outage testing</a></li>
+<li><a href="#63-security-hardening">63. Security hardening</a></li>
+<li><a href="#64-change-management">64. Change management</a></li>
+<li><a href="#65-upgrade-strategy">65. Upgrade strategy</a></li>
+<li><a href="#66-operational-acceptance-checklist">66. Operational acceptance checklist</a></li>
+<li><a href="#67-when-not-to-use-sc4s">67. When not to use SC4S</a></li>
+<li><a href="#68-a-practical-decision-matrix">68. A practical decision matrix</a></li>
+<li><a href="#69-a-reference-architecture-for-a-mixed-security-estate">69. A reference architecture for a mixed security estate</a></li>
+<li><a href="#70-the-operational-lesson">70. The operational lesson</a></li>
+<li><a href="#71-command-reference">71. Command reference</a></li>
+<li><a href="#72-further-reading">72. Further reading</a></li></ol></aside>
+</div></main>
+<footer class="site-footer"><div class="site-shell"><span>Majid Ershadi · Security architecture and application security</span><span>Minimal by design</span></div></footer>
+</body></html>

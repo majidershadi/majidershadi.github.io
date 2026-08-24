@@ -1,0 +1,37 @@
+[Unit]
+Description=Splunk Connect for Syslog
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+Environment="SC4S_IMAGE=sc4slocal:approved"
+Environment="SC4S_PERSIST_MOUNT=splunk-sc4s-var:/var/lib/syslog-ng"
+Environment="SC4S_LOCAL_MOUNT=/opt/sc4s/local:/etc/syslog-ng/conf.d/local"
+Environment="SC4S_ARCHIVE_MOUNT=/opt/sc4s/archive:/var/lib/syslog-ng/archive"
+Environment="SC4S_TLS_MOUNT=/opt/sc4s/tls:/etc/syslog-ng/tls"
+TimeoutStartSec=0
+
+ExecStartPre=/usr/bin/bash -c '/usr/bin/systemctl set-environment SC4SHOST=$(hostname -s)'
+ExecStartPre=/usr/bin/bash -c '/usr/bin/docker rm -f SC4S >/dev/null 2>&1 || true'
+
+ExecStart=/usr/bin/docker run \
+  --pull=never \
+  -e SC4S_CONTAINER_HOST=${SC4SHOST} \
+  -v ${SC4S_PERSIST_MOUNT} \
+  -v ${SC4S_LOCAL_MOUNT} \
+  -v ${SC4S_ARCHIVE_MOUNT} \
+  -v ${SC4S_TLS_MOUNT} \
+  --env-file=/opt/sc4s/env_file \
+  --network host \
+  --name SC4S \
+  --rm \
+  ${SC4S_IMAGE}
+
+ExecStop=/usr/bin/docker stop -t 60 SC4S
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
