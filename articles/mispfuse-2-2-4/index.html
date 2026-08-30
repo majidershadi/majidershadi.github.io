@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MISPFuse 2.2.4: A Safer Bridge from Splunk to MISP — Majid Ershadi</title>
+<meta name="description" content="The engineering story and operating model of MISPFuse 2.2.4: server-validated mappings, encrypted MISP credentials, SPL and alert workflows, hardened packaging, and honest Splunk compatibility." />
+<meta name="referrer" content="strict-origin-when-cross-origin" />
+<meta name="theme-color" content="#14161a" />
+<link rel="canonical" href="https://majidershadi.github.io/articles/mispfuse-2-2-4/" />
+<link rel="stylesheet" href="/assets/site.css" />
+<link rel="alternate" type="application/rss+xml" title="Majid Ershadi Articles" href="/articles/feed.xml" />
+<meta property="og:type" content="article" />
+<meta property="og:title" content="MISPFuse 2.2.4: A Safer Bridge from Splunk to MISP" />
+<meta property="og:description" content="How MISPFuse turns selected Splunk results into controlled, server-validated MISP events without hiding the operational boundaries." />
+<meta property="og:url" content="https://majidershadi.github.io/articles/mispfuse-2-2-4/" />
+<meta property="article:published_time" content="2026-08-30" />
+<meta property="article:modified_time" content="2026-08-30" />
+<meta property="article:author" content="Majid Ershadi" />
+<meta name="twitter:card" content="summary" />
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"MISPFuse 2.2.4: A Safer Bridge from Splunk to MISP","description":"The engineering story and operating model of server-validated mappings, encrypted MISP credentials, SPL and alert workflows, hardened packaging, and honest Splunk compatibility.","author":{"@type":"Person","name":"Majid Ershadi","url":"https://majidershadi.github.io/"},"datePublished":"2026-08-30","dateModified":"2026-08-30","mainEntityOfPage":"https://majidershadi.github.io/articles/mispfuse-2-2-4/","about":["MISP","Splunk Enterprise","Threat intelligence","Application security","Security operations"]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-shell">
+<nav class="site-nav" aria-label="Primary">
+  <a class="site-brand" href="/">Majid Ershadi<span class="dot">.</span></a>
+  <ul class="site-tabs"><li><a href="/">Profile</a></li><li><a href="/articles/" aria-current="page">Articles</a></li></ul>
+</nav>
+</header>
+<main id="main" class="page-main">
+<div class="article-layout">
+<article class="article">
+<header class="article-header">
+<p class="kicker">Threat intelligence · Splunk engineering · Secure delivery</p>
+<h1 class="article-title">MISPFuse 2.2.4: A Safer Bridge from Splunk to MISP</h1>
+<p class="article-deck">Moving an indicator is easy. Preserving its meaning, distribution, taxonomy, credentials, and analyst intent is where the engineering begins.</p>
+<div class="meta"><time datetime="2026-08-30">Published August 30, 2026</time><span>Release examined: 2.2.4</span><span>By Majid Ershadi</span></div>
+</header>
+<div class="article-body">
+
+<blockquote><p>MISPFuse started as a direct way to move a search result into MISP. The project became useful only when I stopped treating that move as a single API call.</p></blockquote>
+
+<p>A SOC often discovers an indicator in Splunk before it exists in the shared threat-intelligence platform. The obvious response is a script: read a field, call MISP, create an attribute. I built that version first. It proved the workflow, but it also exposed every assumption hiding behind the word “push.”</p>
+
+<p>Which MISP instance should receive the data? Is the value an <code>ip-src</code>, an <code>ip-dst</code>, a domain, a URL, or plain text? Should several search rows become one event or many? Is the event safe to publish immediately? Which distribution level is appropriate? What happens when the MISP server’s taxonomy differs from the developer’s memory? And where does the API key live?</p>
+
+<p>MISPFuse 2.2.4 is the current answer to those questions. It turns selected Splunk results into MISP events through named accounts and reusable mapping templates. Analysts can invoke it from SPL or attach it to a scheduled alert. Administrators keep MISP credentials in Splunk’s encrypted storage and the app checks a connection before accepting a new account.</p>
+
+<p>The release is intentionally outbound-only. It does not ingest MISP data into Splunk and it does not attempt to replace a full synchronization platform. Its job is narrower: take the fields an analyst selected, apply an explicit event model, and submit the result with enough validation to fail intelligibly.</p>
+
+<h2 id="from-a-working-script-to-an-operable-application">From a working script to an operable application</h2>
+
+<p>The earliest prototype was a Splunk streaming command. Each row created a new event containing one attribute. The MISP URL and API key lived in a Python file, certificate verification was disabled, organization values were fixed, and events were published by default. It was small and direct, which made it useful for proving the idea. It was not a package I would ask another team to operate.</p>
+
+<p>The UCC transition added a visible Splunk application, a Configuration page, multiple accounts, encrypted API keys, proxy and logging settings, an alert action, and a common pusher shared by both execution paths. Templates replaced the hard-coded IP logic. The application could now describe a relationship between a Splunk field and a MISP attribute instead of assuming every value looked the same.</p>
+
+<p>That intermediate stage was more capable, but release engineering found a second class of problems: generated settings that selected the wrong Python runtime, dependencies that changed at build time, template defaults overwritten by the alert UI, lexical ordering that put <code>map.10</code> before <code>map.2</code>, and packaged bytecode that should never have been there.</p>
+
+<p>The hardened line addressed those failures one by one. Version 2.2.4 carries that design forward while correcting the declared Splunk compatibility range against the validator’s actual catalog.</p>
+
+<h2 id="the-current-data-path">The current data path</h2>
+
+<p>The application has four practical layers. UCC manages accounts and settings. A template loader reads the event defaults and field mappings. Shared push logic groups rows and builds MISP event payloads. A compact HTTP client talks to the four MISP endpoints the workflow actually needs.</p>
+
+<pre><code>Splunk search results
+        │
+        ├── mispfusepush command
+        └── scheduled alert action
+                    │
+                    ▼
+        account + template + overrides
+                    │
+                    ▼
+          group rows and map fields
+                    │
+                    ▼
+        validate types against MISP
+                    │
+                    ▼
+              POST events/add</code></pre>
+
+<p>The command and alert action do not maintain separate interpretations of a template. Both construct the same options and call the same pusher. The command returns a result row with the MISP event ID, UUID, attribute count, status, and message. The alert action writes equivalent outcomes to the Splunk logs and returns a nonzero status when any event fails.</p>
+
+<h2 id="an-account-is-tested-before-it-is-trusted">An account is tested before it is trusted</h2>
+
+<p>A configured account contains a MISP base URL, API key, and certificate-verification choice. The API key is an encrypted UCC field backed by Splunk credential storage. The app accepts HTTP for isolated labs, but HTTPS with verification enabled is the production posture.</p>
+
+<p>Creating or editing an account runs a live test before the configuration is saved. The URL is normalized and rejected if it includes embedded credentials, a query string, a fragment, an invalid port, or a scheme other than HTTP or HTTPS. MISPFuse then authenticates to MISP, reads the server version, reads the current API user, and downloads <code>attributes/describeTypes.json</code>.</p>
+
+<p>This test has two benefits. It catches the ordinary mistakes—wrong host, broken route, untrusted certificate, proxy failure, bad key—and it confirms that the account can read the taxonomy needed later during mapping. Failure messages classify those cases without echoing the API key or proxy password. An account that cannot be tested is not partially stored.</p>
+
+<p>That last behavior is a deliberate tradeoff. It prevents a known-bad account from entering production, but it also means an administrator cannot create or edit the account while MISP is unavailable. In an outage, existing saved configuration remains the path to recovery.</p>
+
+<h2 id="templates-carry-the-threat-intelligence-semantics">Templates carry the threat-intelligence semantics</h2>
+
+<p>A template is the contract between a Splunk search and a MISP event. It defines grouping, event title, distribution, threat level, analysis state, publication state, default <code>to_ids</code>, tags, strictness, and one or more field mappings.</p>
+
+<pre><code class="language-ini">[network_ioc]
+grouping = single_event
+event_info = Network IOCs from Splunk (MISPFuse)
+distribution = 0
+threat_level_id = 4
+analysis = 0
+publish = 0
+to_ids = 1
+tags = source:splunk
+strict = 0
+map.1 = src_ip:ip-src:Network activity:1:0
+map.2 = dest_ip:ip-dst:Network activity:1:0
+map.3 = domain:domain:Network activity:1:0</code></pre>
+
+<p>The mapping form is compact but explicit:</p>
+
+<pre><code>source_field : MISP_type : category : to_ids : disable_correlation : optional_comment_field</code></pre>
+
+<p>The MISP type is mandatory. Category and comment source are optional. Mappings are sorted numerically, so adding <code>map.10</code> no longer changes the intended order. Splunk multivalue fields expand into multiple MISP attributes rather than becoming a Python representation of a list.</p>
+
+<table>
+<thead><tr><th>Included template</th><th>Expected Splunk fields</th><th>Default event behavior</th></tr></thead>
+<tbody>
+<tr><td><code>network_ioc</code></td><td><code>src_ip</code>, <code>dest_ip</code>, <code>domain</code>, <code>url</code>, <code>dest_host</code></td><td>One unpublished event for the result set</td></tr>
+<tr><td><code>file_hashes</code></td><td><code>md5</code>, <code>sha1</code>, <code>sha256</code>, <code>file_name</code></td><td>One unpublished event for the result set</td></tr>
+<tr><td><code>email_phishing</code></td><td><code>src_email</code>, <code>dest_email</code>, <code>subject</code>, <code>url</code></td><td>One unpublished TLP:AMBER event</td></tr>
+<tr><td><code>passthrough</code></td><td><code>ioc_value</code>, optional <code>comment</code></td><td>One unpublished text event per row</td></tr>
+</tbody>
+</table>
+
+<p>The defaults lean toward review. Distribution is organization-only, publication is off, and the general threat level begins at undefined. A search or alert can override event-level choices, but any option left unset inherits from the template. This avoids the earlier mistake where blank-looking UI controls silently replaced safe template values.</p>
+
+<h2 id="live-taxonomy-checking-keeps-mappings-honest">Live taxonomy checking keeps mappings honest</h2>
+
+<p>MISP’s attribute model is not just a list of labels. Types belong to categories, installations can differ, and an old assumption may no longer fit the connected server. MISPFuse downloads the server’s <code>describeTypes</code> response and checks every mapping before it creates an event.</p>
+
+<p>A missing type is always rejected. An unknown type, category, or category/type pairing produces a warning. With strict mode enabled, that mapping is skipped. With strict mode off, MISPFuse warns and sends it, leaving MISP authoritative at submission time. This makes template development possible without pretending that a local snapshot of MISP taxonomy is universal.</p>
+
+<p>The check is performed against the chosen account, which matters when a Splunk deployment talks to more than one MISP installation. The taxonomy is cached for the life of the client instance, so a large result set does not download it once per attribute.</p>
+
+<h2 id="grouping-controls-event-shape">Grouping controls event shape</h2>
+
+<p>The same ten search rows can represent one investigation, ten independent sightings, or several campaigns. MISPFuse therefore separates mapping from grouping.</p>
+
+<table>
+<thead><tr><th>Mode</th><th>Event boundary</th><th>When it fits</th></tr></thead>
+<tbody>
+<tr><td><code>single_event</code></td><td>All rows become one event</td><td>A search describes one incident or investigation</td></tr>
+<tr><td><code>per_row</code></td><td>Each row becomes an event</td><td>Rows are independent records</td></tr>
+<tr><td><code>by_field</code></td><td>Rows sharing a selected value become an event</td><td>A campaign, host, case, or tenant field defines the boundary</td></tr>
+</tbody>
+</table>
+
+<p>The event title can include <code>$field$</code> tokens resolved from the first row in a group. That is useful for a case ID or campaign name, but it also means the grouping field and title field should be chosen together. A title derived from an arbitrary first row is technically valid and operationally confusing.</p>
+
+<h2 id="manual-push-and-scheduled-push-share-the-same-rules">Manual and scheduled pushes share the same rules</h2>
+
+<p>For an analyst, the fastest way to understand a template is to use the command against a small synthetic result set. The documentation-only ranges below cannot be mistaken for production indicators:</p>
+
+<pre><code class="language-spl">| makeresults count=2
+| streamstats count AS sample
+| eval src_ip=if(sample=1,"192.0.2.10","198.51.100.20"),
+       domain=if(sample=1,"ioc-one.example.com","ioc-two.example.com")
+| fields - _time sample
+| mispfusepush account=lab template=network_ioc
+    event_info="MISPFuse network test"
+    distribution=0 tags="mispfuse:test" publish=false</code></pre>
+
+<p>A successful run returns the event ID and UUID, making it easy to move from Splunk to the exact object created in MISP. The scheduled-alert path uses the same account, template, grouping, and event defaults. The saved search should produce data only; it should not contain <code>mispfusepush</code> when the MISPFuse alert action is also attached, or the same result can be submitted twice.</p>
+
+<p>Search preview is another source of accidental repetition. Splunk can invoke <code>sendalert</code> more than once while preview is enabled. Test alerts should run against a non-production MISP organization, with distribution set to zero and publication disabled, until the behavior is verified.</p>
+
+<h2 id="a-small-misp-client-was-safer-than-a-large-dependency-tree">A small MISP client was safer than a large dependency tree</h2>
+
+<p>The legacy application carried PyMISP and a copied Python environment. That snapshot contained more than a thousand compiled files, native extensions, Windows executables, and duplicate versions of several libraries. It was difficult to audit and unreliable across Splunk’s bundled Python runtimes.</p>
+
+<p>The current client implements only the operations MISPFuse needs:</p>
+
+<table>
+<thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>GET servers/getVersion</code></td><td>Confirm the target is a responding MISP server</td></tr>
+<tr><td><code>GET users/view/me</code></td><td>Confirm the API key identifies a readable user</td></tr>
+<tr><td><code>GET attributes/describeTypes.json</code></td><td>Load the live type and category model</td></tr>
+<tr><td><code>POST events/add</code></td><td>Create the prepared event and attributes</td></tr>
+</tbody>
+</table>
+
+<p>Removing PyMISP was not a criticism of its broader feature set. MISPFuse uses a very small slice of the MISP API, and shipping a narrow client makes that slice easier to reason about. Runtime dependencies are pinned to exact versions and SHA-256 hashes. The package gate rejects native libraries, compiled bytecode, and <code>__pycache__</code> directories.</p>
+
+<h2 id="the-http-boundary-is-deliberately-tight">The HTTP boundary is deliberately tight</h2>
+
+<p>The client uses separate connection and read timeouts: five seconds to connect and 30 seconds to read during normal pushes. The account test uses a shorter 15-second read timeout so a Configuration save does not hang indefinitely.</p>
+
+<p>Redirects are disabled. Automatic response decompression is disabled, and the request sends <code>Accept-Encoding: identity</code>. A response is read only up to 8 MiB before JSON parsing. These controls close a few quiet amplification paths: a compromised or misconfigured endpoint cannot redirect the API key to another host, return a tiny compressed body that expands dramatically, or feed an unbounded document into Splunk’s Python process.</p>
+
+<p>The client does not automatically retry event creation. That is conservative for an endpoint where a lost response can leave a real event behind. The cost is that a transient network failure needs an operator decision. Because version 2.2.4 has no idempotency key or duplicate-event prevention, an automatic retry would be unsafe without a clear deduplication design.</p>
+
+<h2 id="credential-and-privacy-boundaries">Credential and privacy boundaries</h2>
+
+<p>MISP keys and proxy passwords use Splunk encrypted credential storage. Decryption happens only when an account test, command, or alert needs the value. Connection errors replace the API key and embedded proxy credentials before a message is returned or logged.</p>
+
+<p>This storage is reversible for sufficiently privileged administrators. A dedicated MISP automation account remains essential. It should have permission to read its own user and taxonomy and to create only the events the workflow requires. A Splunk host compromise should trigger key rotation.</p>
+
+<p>MISPFuse sends only the fields selected by the active template. It has no publisher telemetry, analytics, or diagnostic upload. Splunk itself may check Splunkbase for updates, but the application code does not send event content back to the maintainer.</p>
+
+<p>Templates deserve the same review as code because they decide what leaves Splunk. A broad <code>passthrough</code> mapping can export a value that an analyst did not intend to share. Distribution, TLP tag, <code>to_ids</code>, correlation, and publication state should be reviewed alongside the field list, not afterward.</p>
+
+<h2 id="why-version-2-2-4-says-splunk-8-or-later">Why version 2.2.4 says Splunk 8 or later</h2>
+
+<p>The compatibility story is less glamorous than the feature set, but it is one of the most instructive parts of the release. MISPFuse 2.1.0 targeted Splunk 10.2 and Python 3.13. Splunkbase’s SLIM validation did not accept the corresponding Enterprise range. Simply lowering the manifest would have made the package look compatible without making its code and dependencies compatible.</p>
+
+<p>The later releases moved the runtime boundary honestly. Version 2.2.0 supported Python 3.9 and 3.13. The next validator results pushed the declared floor through Splunk 9.4, 9.3, and 9.0. Version 2.2.3 added Python 3.7-compatible dependencies and grammar checks so that the 9.0 claim reflected real runtime work.</p>
+
+<p>Version 2.2.4 finally uses <code>&gt;=8.0.0</code>. That is not a guess based on a generated recommendation. Splunk Packaging Toolkit 1.2.8’s bundled Enterprise catalog explicitly contains 8.0.0, while the suggested 8.1.0 boundary was absent from that standalone catalog. Splunk 8.x supplies Python 3.7 and supports the <code>python.version = python3</code> extension selector used by the app.</p>
+
+<table>
+<thead><tr><th>Platform era</th><th>Runtime declaration</th><th>Release evidence</th></tr></thead>
+<tbody>
+<tr><td>Splunk 8.x and early 9.x</td><td><code>python.version = python3</code></td><td>Python 3.7 dependency, syntax, and unit gates</td></tr>
+<tr><td>Later supported releases</td><td>Compatible Python 3 runtime</td><td>Python 3.9 unit and dependency gates</td></tr>
+<tr><td>Splunk 10.2+</td><td><code>python.required = 3.9, 3.13</code></td><td>Python 3.13 unit and dependency gates</td></tr>
+</tbody>
+</table>
+
+<p>The important lesson is not that a lower version number is better. It is that a manifest constraint, dependency lock, generated runtime selector, and test matrix must tell the same story.</p>
+
+<h2 id="release-validation-and-cloud-caveats">Release validation and Cloud caveats</h2>
+
+<p>The 2.2.4 tag and main branch point to the same release commit. The suite contains 41 unit tests and is exercised across Python 3.7, 3.9, and 3.13. UCC 6.5.3 builds the package, post-build checks examine the generated files, standalone SLIM validation checks the manifest, and AppInspect 4.3.0 runs with cloud tags.</p>
+
+<p>The package manifest identifies 2.2.4 as a production/stable Apache-2.0 release dated August 14, 2026. Splunk Cloud installation is still subject to online vetting for the exact archive an operator uploads. UCC’s generated Configuration-page Mako template may appear as a future AppInspect finding; that should be interpreted against Splunk’s current enforcement policy, not silently discarded.</p>
+
+<p>Compatibility also needs a real environment check. “Splunk 8.0 or later” is a release boundary, not a promise that every combination of search-head topology, proxy, MISP customization, certificate chain, and role capability has already been exercised.</p>
+
+<h2 id="operating-mispfuse-without-surprises">Operating MISPFuse without surprises</h2>
+
+<p>A safe rollout starts with a dedicated MISP test organization and a least-privileged automation key. I configure the account with TLS verification enabled, let the save-time test confirm the server and taxonomy, and begin with one included template rather than a custom mapping.</p>
+
+<p>The first SPL test uses documentation-only indicators, distribution zero, and publication off. I inspect the returned event ID, open the event in MISP, and compare every attribute’s type, category, <code>to_ids</code>, correlation setting, and tag. Only then do I repeat the same data-producing search as a scheduled alert.</p>
+
+<p>Custom templates should be introduced through a similar small sample. Strict mode is useful while developing because it skips mappings rejected by the connected taxonomy. Once the mapping is stable, the operator can decide whether warnings should continue to allow MISP to make the final decision.</p>
+
+<p>Application logs should be searched in <code>_internal</code> during early runs. An “account not found” error usually means the SPL or alert value does not exactly match the configured stanza. “No mappable attributes” means the search fields and active template do not meet. A MISP rejection should be investigated by comparing the value, type, category, and server taxonomy—not by turning off certificate validation.</p>
+
+<h2 id="what-the-release-still-does-not-solve">What the release still does not solve</h2>
+
+<p>MISPFuse creates outbound events; it does not pull attributes, update an existing event, reconcile state, or prevent duplicates. It has no automatic retry or backoff and no custom CA-bundle field in its Configuration page. Proxy settings are global rather than per MISP account. Templates live in a configuration file and must also be added to <code>globalConfig.json</code> if they should appear in the alert dropdown.</p>
+
+<p>Those limits are not hidden roadmap promises. They define where the current tool stops. An organization that needs bidirectional synchronization, conflict resolution, bulk queues, or exactly-once delivery needs a different architecture—probably a persistent integration service between the two platforms.</p>
+
+<p>Within its boundary, MISPFuse does something valuable: it turns an analyst-selected result set into an explicit threat-intelligence object, and it leaves enough evidence to understand how that object was formed.</p>
+
+<h2 id="the-part-i-would-keep-even-if-the-code-changed">The part I would keep even if the code changed</h2>
+
+<p>The most durable idea in MISPFuse is the template. It forces a conversation before data moves: this field is an <code>ip-src</code>; this hash should contribute to IDS; these rows describe one event; this event stays unpublished; this tag communicates handling. The code can evolve, but that contract remains useful.</p>
+
+<p>The second durable idea is compatibility honesty. The path from 2.1.0 to 2.2.4 looks untidy because the external validator’s accepted catalog kept changing the answer. Preserving that history is better than rewriting it as a straight line. Each manifest change was paired with runtime and dependency work, and the final claim is tied to a catalog entry that can be reproduced.</p>
+
+<p>MISPFuse is small by design. It does not try to model all of MISP or all of Splunk. It provides a controlled seam between them, with the sensitive parts—credentials, taxonomy, grouping, distribution, and publication—made visible enough to operate responsibly.</p>
+
+<h2 id="project-reference">Project reference</h2>
+
+<p>The source, historical milestones, release notes, tests, and issue tracker are in the <a href="https://github.com/majidershadi/mispfuse">MISPFuse repository</a>. The release discussed here is <a href="https://github.com/majidershadi/mispfuse/releases/tag/v2.2.4">version 2.2.4</a>. MISPFuse is an independent project, licensed under Apache-2.0, and is not affiliated with or endorsed by Splunk or the MISP Project.</p>
+
+</div>
+</article>
+<aside class="toc" aria-label="Table of contents">
+<h2>Contents</h2>
+<ol>
+<li><a href="#from-a-working-script-to-an-operable-application">From script to application</a></li>
+<li><a href="#the-current-data-path">The current data path</a></li>
+<li><a href="#an-account-is-tested-before-it-is-trusted">Account validation</a></li>
+<li><a href="#templates-carry-the-threat-intelligence-semantics">Template semantics</a></li>
+<li><a href="#live-taxonomy-checking-keeps-mappings-honest">Taxonomy validation</a></li>
+<li><a href="#grouping-controls-event-shape">Event grouping</a></li>
+<li><a href="#manual-push-and-scheduled-push-share-the-same-rules">Manual and scheduled pushes</a></li>
+<li><a href="#a-small-misp-client-was-safer-than-a-large-dependency-tree">The direct MISP client</a></li>
+<li><a href="#the-http-boundary-is-deliberately-tight">HTTP controls</a></li>
+<li><a href="#credential-and-privacy-boundaries">Credentials and privacy</a></li>
+<li><a href="#why-version-2-2-4-says-splunk-8-or-later">Compatibility history</a></li>
+<li><a href="#release-validation-and-cloud-caveats">Release validation</a></li>
+<li><a href="#operating-mispfuse-without-surprises">Operating MISPFuse</a></li>
+<li><a href="#what-the-release-still-does-not-solve">Current limitations</a></li>
+<li><a href="#the-part-i-would-keep-even-if-the-code-changed">Final reflection</a></li>
+<li><a href="#project-reference">Project reference</a></li>
+</ol>
+</aside>
+</div>
+</main>
+<footer class="site-footer"><div class="site-shell"><span>Majid Ershadi · Security architecture and application security</span><span>Minimal by design</span></div></footer>
+</body>
+</html>

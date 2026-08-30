@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>REST Profiler 1.1.0: Reliable API Workflows from Splunk — Majid Ershadi</title>
+<meta name="description" content="A first-hand engineering account of REST Profiler 1.1.0: reusable Splunk request profiles, encrypted bodies, secret-safe previews, per-result delivery, retries, validation, mTLS, and operational boundaries." />
+<meta name="referrer" content="strict-origin-when-cross-origin" />
+<meta name="theme-color" content="#14161a" />
+<link rel="canonical" href="https://majidershadi.github.io/articles/rest-profiler-1-1/" />
+<link rel="stylesheet" href="/assets/site.css" />
+<link rel="alternate" type="application/rss+xml" title="Majid Ershadi Articles" href="/articles/feed.xml" />
+<meta property="og:type" content="article" />
+<meta property="og:title" content="REST Profiler 1.1.0: Reliable API Workflows from Splunk" />
+<meta property="og:description" content="How REST Profiler turns reusable request definitions into a safer, testable path from Splunk alerts to external APIs." />
+<meta property="og:url" content="https://majidershadi.github.io/articles/rest-profiler-1-1/" />
+<meta property="article:published_time" content="2026-08-30" />
+<meta property="article:modified_time" content="2026-08-30" />
+<meta property="article:author" content="Majid Ershadi" />
+<meta name="twitter:card" content="summary" />
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"REST Profiler 1.1.0: Reliable API Workflows from Splunk","description":"A first-hand engineering account of reusable Splunk request profiles, encrypted bodies, secret-safe previews, per-result delivery, retries, validation, mTLS, and operational boundaries.","author":{"@type":"Person","name":"Majid Ershadi","url":"https://majidershadi.github.io/"},"datePublished":"2026-08-30","dateModified":"2026-08-30","mainEntityOfPage":"https://majidershadi.github.io/articles/rest-profiler-1-1/","about":["Splunk Enterprise","REST APIs","Application security","Alert actions","HTTP reliability"]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-shell">
+<nav class="site-nav" aria-label="Primary">
+  <a class="site-brand" href="/">Majid Ershadi<span class="dot">.</span></a>
+  <ul class="site-tabs"><li><a href="/">Profile</a></li><li><a href="/articles/" aria-current="page">Articles</a></li></ul>
+</nav>
+</header>
+<main id="main" class="page-main">
+<div class="article-layout">
+<article class="article">
+<header class="article-header">
+<p class="kicker">Splunk engineering · API integration · Application security</p>
+<h1 class="article-title">REST Profiler 1.1.0: Reliable API Workflows from Splunk</h1>
+<p class="article-deck">The difficult part of calling an API from an alert is rarely the HTTP request. It is keeping credentials, retries, validation, result mapping, and later maintenance under control.</p>
+<div class="meta"><time datetime="2026-08-30">Published August 30, 2026</time><span>Release examined: 1.1.0</span><span>By Majid Ershadi</span></div>
+</header>
+<div class="article-body">
+
+<blockquote><p>I wanted an API call in Splunk to be something an operator could inspect, test, name, and reuse—not a block of sensitive free text copied between alerts.</p></blockquote>
+
+<p>REST Profiler began with a small irritation that becomes a serious operational problem at scale. Splunk can send an HTTP request when an alert fires, but a real integration is more than a URL and a body. It has credentials, certificate policy, failure rules, timeouts, retry behavior, response expectations, and usually a few details that nobody remembers six months after the alert was created.</p>
+
+<p>If every saved search carries its own copy of that request, those details drift. One alert still points to the old endpoint. Another contains an expired token. A third silently accepts an HTTP 500 because nobody defined what success means. Troubleshooting starts with archaeology: open several alerts, compare text fields, and hope the request shown in the UI is the request that actually ran.</p>
+
+<p>REST Profiler takes a different approach. The HTTP request becomes a named <em>profile</em>. Alerts, ad-hoc searches, previews, and test sends refer to that profile instead of reconstructing it. Version 1.1.0 is the current stable release, published on August 20, 2026. It targets Splunk Enterprise 10.x on Linux and is built with Splunk UCC 6.5.3.</p>
+
+<h2 id="the-profile-is-the-unit-of-maintenance">The profile is the unit of maintenance</h2>
+
+<p>A profile contains the request method, URL, headers, content type, body, authentication, TLS choice, proxy, timeout, retry policy, rate limit, and response-validation rules. It can be created, edited, cloned, previewed, tested, and deleted from the app’s Configuration page.</p>
+
+<p>The important change is organizational rather than cosmetic. A saved search says “run the incident-ingest profile”; it does not need to know how that profile authenticates or what the receiving API considers successful. When an endpoint changes, the operator edits one definition and tests it before the next alert depends on it.</p>
+
+<table>
+<thead><tr><th>Execution path</th><th>What it is useful for</th><th>Network effect</th></tr></thead>
+<tbody>
+<tr><td>Preview</td><td>Review the composed request with protected values masked</td><td>No request is sent</td></tr>
+<tr><td>Test send</td><td>Exercise a profile interactively and inspect the response</td><td>One live request</td></tr>
+<tr><td><code>restprofilersend</code></td><td>Run or inspect a profile from SPL</td><td>Preview or one live request</td></tr>
+<tr><td>Alert action</td><td>Run a static request or deliver triggering rows</td><td>One request, or one per result row</td></tr>
+</tbody>
+</table>
+
+<p>The Configuration page is generated from <code>globalConfig.json</code>. UCC provides the React UI, REST endpoints, validation plumbing, alert registration, and command wrapper. I still keep the execution code separate. A single Python client composes and sends requests for every path, which avoids a surprisingly common integration bug: the Test button works one way while the production alert works another.</p>
+
+<pre><code>Configuration page ─┐
+Search command      ├── shared request client ── compose ── send ── validate
+Alert action       ─┘             │
+                                  └── decrypt protected values at execution time</code></pre>
+
+<h2 id="what-version-1-1-changed">What version 1.1 changed</h2>
+
+<p>The first release protected passwords, tokens, client certificates, key passphrases, and proxy passwords. That left an uncomfortable gap: API credentials often live inside JSON or XML bodies. Treating the body as ordinary configuration meant a request could be correct and still store its most sensitive value in clear text.</p>
+
+<p>Version 1.1.0 moves the complete saved Body field into Splunk secure storage. The protection applies to the whole value, not only to fragments labeled as secrets. Splunk stores the value through <code>passwords.conf</code>, encrypted at rest with the instance’s <code>splunk.secret</code>, and the app obtains the decrypted value only inside <code>splunkd</code> when it must compose a request.</p>
+
+<p>This is reversible application-secret storage, not a password hash. An administrator with sufficient Splunk or operating-system privilege is still inside the trust boundary. The practical benefit is narrower exposure: the body is not left as readable text in the profile stanza or casually revealed through normal configuration access.</p>
+
+<h2 id="encryption-and-preview-masking-solve-different-problems">Encryption and preview masking solve different problems</h2>
+
+<p>Encrypting a body at rest does not answer a second question: what should the Preview screen show? An operator may need to see the JSON structure while keeping a password, tenant secret, or private identifier out of a screen share. REST Profiler therefore uses section signs as display markers.</p>
+
+<pre><code class="language-json">{
+  "username": "§api-user§",
+  "password": "§change-me§",
+  "scope": "events:write"
+}</code></pre>
+
+<p>Preview renders the two marked values as <code>********</code>. A live request removes the delimiters and sends the original values. A doubled marker, <code>§§</code>, represents a literal section sign. If a marker is left unmatched, request composition stops with a generic validation message; the error deliberately does not repeat the body.</p>
+
+<p>The distinction matters. The entire saved body is encrypted whether markers are present or not. Markers control what a human sees after the body has been decrypted for composition. Unmarked body text remains visible in Preview, so marking is appropriate for fragments that should stay out of screenshots and support sessions.</p>
+
+<h2 id="credentials-belong-in-the-authentication-model">Credentials belong in the authentication model</h2>
+
+<p>Profiles support no authentication, HTTP Basic, a bearer or custom token header, and mutual TLS. Basic passwords and token values use encrypted storage. The token method lets the operator choose the header name and prefix, which covers familiar <code>Authorization: Bearer</code> requests as well as APIs that expect a dedicated header such as <code>X-API-Key</code>.</p>
+
+<p>REST Profiler masks <code>Authorization</code>, <code>Proxy-Authorization</code>, and the configured token header in previews and returned request metadata. That is why a secret should be entered through the Authentication section rather than pasted into the free-form headers box. A random custom header is configuration text unless it is the header declared by the token authentication method.</p>
+
+<p>The URL deserves similar care. Query strings are routinely captured by proxies, load balancers, browser history, and server logs. A token in the URL sits outside the app’s secret fields and is much harder to contain. Put credentials in the supported authentication fields or the encrypted body, never in the URI.</p>
+
+<h2 id="mutual-tls-without-a-permanent-key-file">Mutual TLS without a permanent key file</h2>
+
+<p>For mutual TLS, a profile stores a base64-encoded PEM containing the client certificate and private key. An optional key passphrase is protected separately. During a live request, the client decodes the PEM into an owner-readable temporary file, loads it into the TLS context, and removes the file in cleanup whether the request succeeds or fails.</p>
+
+<p>Certificate verification is enabled by default and uses the CA bundle shipped with the app. An internal CA can be supplied through <code>REQUESTS_CA_BUNDLE</code> in <code>splunk-launch.conf</code>. The per-profile switch to disable verification is retained for controlled lab work, but it changes the meaning of TLS: traffic may still be encrypted while the remote endpoint is no longer authenticated.</p>
+
+<h2 id="turning-search-results-into-api-input">Turning search results into API input</h2>
+
+<p>A static profile is useful for a webhook or health action. The more interesting case is forwarding the results that caused an alert. When result delivery is enabled, REST Profiler reads the triggering events and issues one request for each row. The release caps a single trigger at 1,000 rows so an unexpectedly broad search cannot generate an unbounded burst.</p>
+
+<table>
+<thead><tr><th>Format</th><th>Where the row goes</th><th>Typical use</th></tr></thead>
+<tbody>
+<tr><td>JSON</td><td>Request body</td><td>Modern event and incident APIs</td></tr>
+<tr><td>XML</td><td>Request body</td><td>Structured legacy integrations</td></tr>
+<tr><td>Form</td><td>URL-encoded request body</td><td>Form-style web endpoints</td></tr>
+<tr><td>Query parameters</td><td>Appended to the URL</td><td>Simple lookup or control endpoints</td></tr>
+<tr><td>Custom template</td><td>Tokens in the URL and body</td><td>APIs with a fixed document shape</td></tr>
+</tbody>
+</table>
+
+<p>For JSON, XML, form, and query delivery, the profile can select and order fields. If the selection is empty, internal fields beginning with an underscore are excluded. Multivalue fields are converted into newline-separated text by the current implementation, a detail worth knowing when the receiving API expects a real JSON array.</p>
+
+<p>The custom template format substitutes <code>$field$</code> tokens in both the URL and body. <code>$$</code> produces a literal dollar sign, while an unknown token is left unchanged. That last behavior makes a missing field visible to the receiving side instead of silently turning it into an empty string.</p>
+
+<pre><code class="language-json">{
+  "host": "$host$",
+  "severity": "$severity$",
+  "message": "$_raw$"
+}</code></pre>
+
+<p>Custom substitution is intentionally simple; it is not a JSON-aware templating engine. If a field can contain quotes, backslashes, or line breaks, automatic JSON delivery is safer because it performs serialization. Templates are best reserved for known, constrained values or non-JSON formats.</p>
+
+<h2 id="reliability-is-a-profile-decision">Reliability is a profile decision</h2>
+
+<p>Each profile sets a timeout between one and 600 seconds. Retries range from zero to five, with exponential backoff starting at a configurable interval. Connection failures and timeouts are retryable. TLS handshake failures are not, because repeating the same certificate error rarely improves anything. HTTP 5xx responses and rate-limit responses can be added to the retry policy explicitly.</p>
+
+<p>This flexibility comes with an old distributed-systems warning: a retry does not prove the first request had no effect. A POST may reach the server, create an incident, and lose its response on the return path. Retrying can create a duplicate unless the destination accepts an idempotency key or performs its own deduplication. REST Profiler can carry such a key in a header or body, but it cannot invent the destination’s idempotency contract.</p>
+
+<p>A per-row rate limit adds a minimum pause between requests within one alert run. It is useful for a considerate integration, but it is not a global scheduler across search heads or concurrent alerts. Capacity planning still needs to consider how many alerts can fire at once.</p>
+
+<h2 id="a-response-is-not-the-same-as-success">A response is not the same as success</h2>
+
+<p>Receiving HTTP is a transport outcome. It may not be the business outcome the alert needed. By default, REST Profiler treats status codes below 400 as valid. A profile can replace that broad rule with an explicit set or range such as <code>200-299,302</code> and can require a string in the response body.</p>
+
+<p>Both conditions must pass when both are configured. The resulting record carries the status, reason, elapsed time, attempt count, response headers, a truncated response body, and a validation message. The body is limited to 100,000 characters in returned metadata to prevent an oversized response from overwhelming the alert path.</p>
+
+<p>The alert action can write responses back to Splunk using the <code>rest_profiler:response</code> sourcetype. That is valuable for audit and troubleshooting, but it should be enabled deliberately. External APIs sometimes echo submitted content or return tokens in response bodies. Index access, retention, and field extraction should match the sensitivity of the integration.</p>
+
+<h2 id="a-practical-operating-rhythm">A practical operating rhythm</h2>
+
+<p>I treat profile activation as a small release, even when the destination looks simple. I create the profile with verification on and retries off, use Preview to inspect the method, URL, headers, and body shape, then perform a Test send against a non-production object or a dedicated test endpoint. Only after the success rule matches the real response do I attach the profile to a saved alert.</p>
+
+<p>The first production run is watched in <code>_internal</code> through the app log and Splunk’s alert-action messages:</p>
+
+<pre><code class="language-spl">index=_internal source=*rest_profiler*.log*
+index=_internal source=*splunkd.log* sendmodalert action=rest_profiler_send_alert</code></pre>
+
+<p>If a profile needs result delivery, I begin with a narrow scheduled search and a receiving test tenant. A two-row sample tells me far more than a thousand-row first attempt: I can confirm field selection, escaping, rate behavior, validation, and whether the receiving platform creates duplicates.</p>
+
+<h2 id="upgrading-existing-profiles">Upgrading existing profiles</h2>
+
+<p>Version 1.1.0 keeps existing profiles readable. Before upgrading, back up the app’s <code>local</code> directory, install the new package over the old one, and restart Splunk. An existing profile with a Body value should be edited and saved once after the upgrade; that write migrates the body into encrypted secure storage.</p>
+
+<p>Preview and Test send should be repeated after migration. If an upgrade behaves as though old handlers or libraries are still present, the reliable recovery path is a clean reinstall with a restart after removal and another restart after installation, restoring the backed-up <code>local</code> configuration afterward.</p>
+
+<h2 id="boundaries-worth-documenting">Boundaries worth documenting</h2>
+
+<p>REST Profiler is an outbound request tool, not a workflow engine. It does not coordinate transactions across endpoints, provide a distributed rate limiter, or guarantee exactly-once delivery. Redirects are followed by the current client, so a profile owner should understand the destination’s redirect behavior, especially when credentials are involved. A receiving endpoint should also have its own request-size and authorization controls.</p>
+
+<p>The app supports a wide set of methods because APIs differ, but “supported” is not the same as “safe to retry.” GET and HEAD are normally idempotent. POST often is not. PUT and DELETE semantics depend on the endpoint. The profile makes the retry policy visible; the operator still has to choose it with knowledge of the remote API.</p>
+
+<p>Splunk secure storage narrows casual exposure but does not protect secrets from a fully privileged Splunk administrator or a compromised host. Client certificates, tokens, and passwords should therefore belong to dedicated integration identities with the least permission the endpoint allows. Rotation remains part of normal operations.</p>
+
+<h2 id="release-evidence-and-the-appinspect-edge">Release evidence and the AppInspect edge</h2>
+
+<p>The 1.1.0 tag and the main branch point to the same release commit. Its build process produces the archive, checksum, native AppInspect exit code, and JSON report from the tag. Focused tests cover body-marker parsing, safe failure for unmatched markers, live-versus-preview composition, and header masking.</p>
+
+<p>AppInspect 4.3.0 reported zero current errors and zero current failures for the release. It reported one <code>future_failure</code> against the static Mako bootstrap generated by UCC 6.5.3. Splunk’s August 20 enforcement update kept that specific check in warning status and stated that it does not remove Cloud compatibility at this time. The release gate accepts only the explicitly deferred UCC-related checks; any other error, failure, or future finding still blocks publication.</p>
+
+<p>That policy is deliberately narrow. Ignoring an entire AppInspect exit code because one generated file is controversial would hide unrelated security findings. The useful question is not “did the tool exit zero?” but “which exact checks produced the nonzero result, and does the documented policy cover them?”</p>
+
+<h2 id="where-rest-profiler-fits">Where REST Profiler fits</h2>
+
+<p>The app is most useful when several Splunk searches talk to the same external systems: incident platforms, internal orchestration services, ticketing APIs, enrichment gateways, or purpose-built webhooks. It gives those requests a stable home and a shared operational vocabulary.</p>
+
+<p>The feature I value most in 1.1.0 is not the section-sign syntax by itself. It is the separation of concerns behind it. Storage encryption protects configuration at rest. Preview masking protects operational visibility. Authentication fields keep secrets out of arbitrary headers. Validation describes the expected response. Retry policy describes acceptable repetition. Each control answers a different question, and the profile keeps those answers together.</p>
+
+<p>That is what turns an HTTP call from a convenient alert field into maintainable integration infrastructure.</p>
+
+<h2 id="project-reference">Project reference</h2>
+
+<p>The source, release history, build instructions, and issue tracker are in the <a href="https://github.com/majidershadi/rest_profiler">REST Profiler repository</a>. The stable release discussed here is <a href="https://github.com/majidershadi/rest_profiler/releases/tag/v1.1.0">version 1.1.0</a>. REST Profiler is an independent Apache-2.0 project.</p>
+
+</div>
+</article>
+<aside class="toc" aria-label="Table of contents">
+<h2>Contents</h2>
+<ol>
+<li><a href="#the-profile-is-the-unit-of-maintenance">Profiles as the maintenance unit</a></li>
+<li><a href="#what-version-1-1-changed">What 1.1 changed</a></li>
+<li><a href="#encryption-and-preview-masking-solve-different-problems">Encryption and masking</a></li>
+<li><a href="#credentials-belong-in-the-authentication-model">Authentication</a></li>
+<li><a href="#mutual-tls-without-a-permanent-key-file">Mutual TLS</a></li>
+<li><a href="#turning-search-results-into-api-input">Result delivery</a></li>
+<li><a href="#reliability-is-a-profile-decision">Reliability</a></li>
+<li><a href="#a-response-is-not-the-same-as-success">Response validation</a></li>
+<li><a href="#a-practical-operating-rhythm">Operating rhythm</a></li>
+<li><a href="#upgrading-existing-profiles">Upgrade notes</a></li>
+<li><a href="#boundaries-worth-documenting">Security boundaries</a></li>
+<li><a href="#release-evidence-and-the-appinspect-edge">Release evidence</a></li>
+<li><a href="#where-rest-profiler-fits">Where it fits</a></li>
+<li><a href="#project-reference">Project reference</a></li>
+</ol>
+</aside>
+</div>
+</main>
+<footer class="site-footer"><div class="site-shell"><span>Majid Ershadi · Security architecture and application security</span><span>Minimal by design</span></div></footer>
+</body>
+</html>
