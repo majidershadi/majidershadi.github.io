@@ -1,7 +1,7 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Building Secure Splunk Apps in a Moving Ecosystem — Majid Ershadi</title>
-<meta name="description" content="A security-first journey from a UI-less Splunk SDK prototype to UCC, AppInspect, SSDLC, and the compatibility tax of Splunk application development." />
+<meta name="description" content="A security-first Splunk development journey, including the UCC-generated base.html bug reported to AppInspect triage and the policy update that reopened publication." />
 <meta name="referrer" content="strict-origin-when-cross-origin" />
 <meta name="theme-color" content="#14161a" />
 <link rel="canonical" href="https://majidershadi.github.io/articles/building-secure-splunk-apps/" />
@@ -9,13 +9,13 @@
 <link rel="alternate" type="application/rss+xml" title="Majid Ershadi Articles" href="/articles/feed.xml" />
 <meta property="og:type" content="article" />
 <meta property="og:title" content="Building Secure Splunk Apps in a Moving Ecosystem — Majid Ershadi" />
-<meta property="og:description" content="A security-first journey from a UI-less Splunk SDK prototype to UCC, AppInspect, SSDLC, and the compatibility tax of Splunk application development." />
+<meta property="og:description" content="A security-first Splunk development journey, including the UCC-generated base.html bug reported to AppInspect triage and the policy update that reopened publication." />
 <meta property="og:url" content="https://majidershadi.github.io/articles/building-secure-splunk-apps/" />
 <meta property="og:image" content="https://majidershadi.github.io/assets/og-building-secure-splunk-apps.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta property="article:published_time" content="2026-08-01" /><meta property="article:author" content="Majid Ershadi" /><script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "Building Secure Splunk Apps in a Moving Ecosystem", "description": "A security-first journey from a UI-less Splunk SDK prototype to UCC, AppInspect, SSDLC, and the compatibility tax of Splunk application development.", "author": {"@type": "Person", "name": "Majid Ershadi", "url": "https://majidershadi.github.io/"}, "datePublished": "2026-08-01", "dateModified": "2026-08-01", "mainEntityOfPage": "https://majidershadi.github.io/articles/building-secure-splunk-apps/", "image": "https://majidershadi.github.io/assets/og-building-secure-splunk-apps.png"}</script></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-shell">
+<meta property="article:published_time" content="2026-08-01" /><meta property="article:modified_time" content="2026-08-30" /><meta property="article:author" content="Majid Ershadi" /><script type="application/ld+json">{"@context": "https://schema.org", "@type": "Article", "headline": "Building Secure Splunk Apps in a Moving Ecosystem", "description": "A security-first Splunk development journey, including the UCC-generated base.html bug reported to AppInspect triage and the policy update that reopened publication.", "author": {"@type": "Person", "name": "Majid Ershadi", "url": "https://majidershadi.github.io/"}, "datePublished": "2026-08-01", "dateModified": "2026-08-30", "mainEntityOfPage": "https://majidershadi.github.io/articles/building-secure-splunk-apps/", "image": "https://majidershadi.github.io/assets/og-building-secure-splunk-apps.png"}</script></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-shell">
 <nav class="site-nav" aria-label="Primary">
   <a class="site-brand" href="/">Majid Ershadi<span class="dot">.</span></a>
   <ul class="site-tabs">
@@ -24,10 +24,10 @@
   </ul>
 </nav>
 </header>
-<main id="main" class="page-main"><div class="article-layout"><article class="article"><header class="article-header"><p class="kicker">Security Architecture · Splunk · SSDLC</p><h1 class="article-title">Building Secure Splunk Apps in a Moving Ecosystem</h1><p class="article-deck">My journey from a UI-less Splunk SDK integration to UCC, AppInspect, and compatibility engineering.</p><div class="meta"><time datetime="2026-08-01">Published August 1, 2026</time><span>Last technically verified July 31, 2026</span><span>By Majid Ershadi</span></div></header><div class="article-body">
+<main id="main" class="page-main"><div class="article-layout"><article class="article"><header class="article-header"><p class="kicker">Security Architecture · Splunk · SSDLC</p><h1 class="article-title">Building Secure Splunk Apps in a Moving Ecosystem</h1><p class="article-deck">My journey from a UI-less Splunk SDK integration to UCC, AppInspect, and compatibility engineering.</p><div class="meta"><time datetime="2026-08-01">Published August 1, 2026</time><span>Updated and technically verified August 30, 2026</span><span>By Majid Ershadi</span></div></header><div class="article-body">
 
 <blockquote>
-<p><strong>Scope and date.</strong> This article describes my first-hand development experience with MISPFuse and REST Profiler for Splunk. Product behavior and compatibility requirements are tied to the versions identified here and may change. <strong>Last technically verified: July 31, 2026.</strong></p>
+<p><strong>Scope and date.</strong> This article describes my first-hand development experience with MISPFuse and REST Profiler for Splunk. Product behavior and compatibility requirements are tied to the versions identified here and may change. <strong>Updated after the AppInspect issue was reported and triaged; last technically verified August 30, 2026.</strong></p>
 </blockquote>
 <p>I did not begin this journey by choosing a framework.</p>
 <p>I began with a security problem.</p>
@@ -183,6 +183,39 @@ Deleting it risked breaking the application.
 Keeping it blocked a strict release gate.
 </code></pre>
 <p>The correct engineering response was not to suppress the finding or delete a file blindly. It was to preserve the package and report, block release, document the reproduction, and ask for a supported remediation.</p>
+<h2 id="reporting-the-bug-and-reopening-publication">Reporting the bug and reopening publication</h2>
+<p>The contradiction did not remain a private build problem. It was tracked publicly as <a href="https://github.com/splunk/addonfactory-ucc-generator/issues/2086">UCC issue #2086</a>, titled “BUG: AppInspect flagging app with future failure <code>check_for_custom_mako_templates</code>.” The issue was opened on July 31, labeled <code>bug</code> and <code>triage</code>, and assigned to a UCC maintainer.</p>
+<p>The technical issue was specific. AppInspect reported that <code>appserver/templates/base.html</code> was a custom Mako template deprecated for Splunk Enterprise 10.4 and advised UCC applications to regenerate with UCC 6.3.0 or later. Yet UCC 6.3.0 had already replaced the old Mako/CherryPy bootstrap with static output, and UCC 6.5.3 still generated a file at that same path. The file contained static HTML and JavaScript with values substituted during the build, not executable Mako Python.</p>
+<p>The validation evidence made the mismatch easier to isolate:</p>
+<pre><code class="language-text">check_for_custom_mako_templates
+appserver/templates/base.html
+result: future_failure
+
+check_for_existence_of_python_code_block_in_mako_template
+result: success
+</code></pre>
+<p>In other words, the check that looked for executable Python inside a Mako template found none, while the broader custom-template check still classified the generated file as a future failure. The behavior was consistent with a path or file-classification rule that did not distinguish UCC’s current static loader from a legacy custom Mako template. That is the AppInspect bug I was trying to identify. It was not a vulnerable template I had written inside MISPFuse or REST Profiler.</p>
+<p>On August 12, the assigned maintainer wrote that a fix was actively being investigated. The difficulty was not a one-line syntax change: removing the flagged files cleanly required changes to how UCC served and routed its custom UI while preserving compatibility across supported Splunk versions.</p>
+<p>On August 14, I added an <a href="https://github.com/splunk/addonfactory-ucc-generator/issues/2086#issuecomment-5296408549">independent reproduction</a> from two applications:</p>
+<table>
+<thead><tr><th>Application</th><th>Build and validation environment</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>MISPFuse 2.1.0</td><td>UCC 6.5.3, AppInspect 4.3.0, Python 3.13, Cloud and self-service tags</td><td>No ordinary errors or failures; one future failure for generated <code>base.html</code></td></tr>
+<tr><td>REST Profiler 1.0.1</td><td>UCC 6.5.3, AppInspect 4.3.0, Python 3.13, Cloud and self-service tags</td><td>The same generated-file future failure</td></tr>
+</tbody>
+</table>
+<p>I deliberately did not patch or remove the generated loader. Configuration and Dashboard views depended on it, and a local edit would create an unsupported fork of framework output. Reporting a minimal, repeatable mismatch was safer than making the package pass by breaking the application.</p>
+<h3>The policy changed before the implementation did</h3>
+<p>On August 20, a participant posted the <a href="https://github.com/splunk/addonfactory-ucc-generator/issues/2086#issuecomment-5350200104">Splunkbase enforcement update</a>. Splunkbase deferred enforcement for four checks:</p>
+<pre><code class="language-text">check_for_custom_mako_templates
+check_for_existence_of_python_code_block_in_mako_template
+check_cherrypy_controllers
+check_for_ucc_framework_version
+</code></pre>
+<p>Those four findings would remain warnings and would not be used to remove Splunk Cloud compatibility. Splunkbase said no action was required for them at that time. Every other AppInspect check remained unchanged and could still affect compatibility.</p>
+<p>That distinction finally reopened the publication path for my applications. I could allow the one documented UCC-generated future finding without weakening the rest of the gate: ordinary errors, ordinary failures, and any unlisted future failure would still stop a release. REST Profiler 1.1.0 applies exactly that narrow policy when it evaluates its AppInspect report.</p>
+<p>This was a policy resolution, not yet a technical fix. UCC 6.6.0 was released on August 21, but its release notes did not identify issue #2086 as fixed. As of August 30, the issue remained open and triaged. The generated-file classification still deserved an engineering correction even though it no longer blocked Splunk Cloud publication under the announced policy.</p>
+<p>The sequence changed my view of a validation failure. A finding can be real as a tool result while still having the wrong ownership or enforcement outcome. The responsible response is to reproduce it, identify whether the application or generator owns the file, preserve the report, escalate with evidence, and narrow any exception to the exact named check. “AppInspect passed” and “AppInspect found something” are both too vague to guide a secure release.</p>
 <h2 id="the-compatibility-tax-of-splunk-development">The compatibility tax of Splunk development</h2>
 <p>I now describe the recurring work across these projects as a <strong>compatibility tax</strong>: the effort required to keep application logic aligned with several independently evolving layers.</p>
 <h3>Python</h3>
@@ -280,7 +313,7 @@ AppInspect report SHA-256
 <p>The correct response is not to weaken those controls. It is to make the platform, generator, dependencies, and validator evolve as one coherent developer system.</p>
 <h2 id="final-reflection">Final reflection</h2>
 <p>MISPFuse began as a small, UI-less integration built directly with the Splunk SDK. The security problem came first. UCC came later because the application needed maintainable configuration, encrypted credentials, validation, and a better administrative experience.</p>
-<p>REST Profiler benefited from those lessons and adopted UCC much earlier. Both applications then reached the same AppInspect 4.3.0 compatibility boundary through a UCC-generated file.</p>
+<p>REST Profiler benefited from those lessons and adopted UCC much earlier. Both applications then reached the same AppInspect 4.3.0 compatibility boundary through a UCC-generated file. Reporting the shared reproduction helped move the problem into public triage, and Splunkbase’s later enforcement update finally allowed publication to continue without pretending the underlying generator/validator mismatch had disappeared.</p>
 <p>That journey changed my understanding of Splunk application development.</p>
 <p>A developer is not only building a feature. The developer is managing a contract between business logic, user authorization, data governance, the Splunk SDK, generated code, Python, dependencies, database backends, front-end frameworks, AppInspect, Cloud policy, CI/CD, and operational support.</p>
 <p>My central lessons are:</p>
@@ -317,10 +350,14 @@ AppInspect report SHA-256
 <li><a href="https://splunk.github.io/addonfactory-ucc-generator/CHANGELOG/">UCC changelog</a></li>
 <li><a href="https://github.com/splunk/addonfactory-ucc-generator/pull/1998">UCC Mako and CherryPy removal pull request</a></li>
 <li><a href="https://raw.githubusercontent.com/splunk/addonfactory-ucc-generator/v6.5.3/splunk_add_on_ucc_framework/package/appserver/templates/base.html">UCC 6.5.3 base template</a></li>
+<li><a href="https://github.com/splunk/addonfactory-ucc-generator/issues/2086">UCC issue #2086: generated <code>base.html</code> flagged as a custom Mako template</a></li>
+<li><a href="https://github.com/splunk/addonfactory-ucc-generator/issues/2086#issuecomment-5296408549">My MISPFuse and REST Profiler reproduction</a></li>
+<li><a href="https://github.com/splunk/addonfactory-ucc-generator/issues/2086#issuecomment-5350200104">Splunkbase’s August 20 AppInspect enforcement update, reproduced in the issue</a></li>
+<li><a href="https://github.com/splunk/addonfactory-ucc-generator/releases/tag/v6.6.0">UCC 6.6.0 release</a></li>
 <li><a href="https://dev.splunk.com/enterprise/reference/appinspect/appinspectcliref">Splunk AppInspect CLI reference</a></li>
 <li><a href="https://help.splunk.com/en/splunk-enterprise/release-notes-and-updates/release-notes">Splunk Enterprise 10.4 release notes</a></li>
 <li><a href="https://csrc.nist.gov/pubs/sp/800/218/final">NIST Secure Software Development Framework</a></li>
 <li><a href="https://owaspsamm.org/model/">OWASP SAMM</a></li>
 <li><a href="https://owasp.org/www-project-application-security-verification-standard/">OWASP ASVS</a></li>
 </ul>
-</div></article><aside class="toc" aria-label="Table of contents"><h2>Contents</h2><ol><li><a href="#mispfuse-started-as-a-direct-sdk-prototype">MISPFuse started as a direct SDK prototype</a></li><li><a href="#the-security-architecture-behind-the-feature">The security architecture behind the feature</a></li><li><a href="#from-a-script-to-a-real-splunk-application">From a script to a real Splunk application</a></li><li><a href="#why-ucc-matters-to-the-splunk-ecosystem">Why UCC matters to the Splunk ecosystem</a></li><li><a href="#the-central-risk-of-generated-frameworks">The central risk of generated frameworks</a></li><li><a href="#rest-profiler-and-the-shared-appinspect-blocker">REST Profiler and the shared AppInspect blocker</a></li><li><a href="#the-compatibility-tax-of-splunk-development">The compatibility tax of Splunk development</a></li><li><a href="#secure-software-development-lessons">Secure software development lessons</a></li><li><a href="#what-i-would-like-splunk-to-improve">What I would like Splunk to improve</a></li><li><a href="#why-i-remain-positive-about-splunk">Why I remain positive about Splunk</a></li><li><a href="#final-reflection">Final reflection</a></li><li><a href="#references-and-evidence">References and evidence</a></li></ol></aside></div></main><footer class="site-footer"><div class="site-shell"><span>Majid Ershadi · Security architecture and application security</span><span>Minimal by design</span></div></footer></body></html>
+</div></article><aside class="toc" aria-label="Table of contents"><h2>Contents</h2><ol><li><a href="#mispfuse-started-as-a-direct-sdk-prototype">MISPFuse started as a direct SDK prototype</a></li><li><a href="#the-security-architecture-behind-the-feature">The security architecture behind the feature</a></li><li><a href="#from-a-script-to-a-real-splunk-application">From a script to a real Splunk application</a></li><li><a href="#why-ucc-matters-to-the-splunk-ecosystem">Why UCC matters to the Splunk ecosystem</a></li><li><a href="#the-central-risk-of-generated-frameworks">The central risk of generated frameworks</a></li><li><a href="#rest-profiler-and-the-shared-appinspect-blocker">REST Profiler and the shared AppInspect blocker</a></li><li><a href="#reporting-the-bug-and-reopening-publication">Reporting the bug and reopening publication</a></li><li><a href="#the-compatibility-tax-of-splunk-development">The compatibility tax of Splunk development</a></li><li><a href="#secure-software-development-lessons">Secure software development lessons</a></li><li><a href="#what-i-would-like-splunk-to-improve">What I would like Splunk to improve</a></li><li><a href="#why-i-remain-positive-about-splunk">Why I remain positive about Splunk</a></li><li><a href="#final-reflection">Final reflection</a></li><li><a href="#references-and-evidence">References and evidence</a></li></ol></aside></div></main><footer class="site-footer"><div class="site-shell"><span>Majid Ershadi · Security architecture and application security</span><span>Minimal by design</span></div></footer></body></html>
