@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://majidershadi.github.io/</loc><lastmod>2026-08-01</lastmod><changefreq>monthly</changefreq><priority>1.0</priority></url>
-  <url><loc>https://majidershadi.github.io/articles/</loc><lastmod>2026-08-30</lastmod><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://majidershadi.github.io/articles/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.8</priority></url>
   <url><loc>https://majidershadi.github.io/articles/rest-profiler-1-1/</loc><lastmod>2026-08-30</lastmod><changefreq>yearly</changefreq><priority>0.9</priority></url>
   <url><loc>https://majidershadi.github.io/articles/mispfuse-2-2-4/</loc><lastmod>2026-08-30</lastmod><changefreq>yearly</changefreq><priority>0.9</priority></url>
-  <url><loc>https://majidershadi.github.io/articles/sc4s-production-guide/</loc><lastmod>2026-08-24</lastmod><changefreq>yearly</changefreq><priority>0.9</priority></url>
+  <url><loc>https://majidershadi.github.io/articles/sc4s-production-guide/</loc><lastmod>2026-09-04</lastmod><changefreq>yearly</changefreq><priority>0.9</priority></url>
   <url><loc>https://majidershadi.github.io/articles/smartpath-dns/</loc><lastmod>2026-08-20</lastmod><changefreq>yearly</changefreq><priority>0.9</priority></url>
   <url><loc>https://majidershadi.github.io/articles/building-secure-splunk-apps/</loc><lastmod>2026-08-30</lastmod><changefreq>yearly</changefreq><priority>0.9</priority></url>
   <url><loc>https://majidershadi.github.io/evidence/appinspect-ucc-compatibility/</loc><lastmod>2026-08-01</lastmod><changefreq>yearly</changefreq><priority>0.5</priority></url>
