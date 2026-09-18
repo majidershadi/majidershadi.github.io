@@ -18,7 +18,7 @@
 <meta property="article:modified_time" content="2026-09-17" />
 <meta property="article:author" content="Majid Ershadi" />
 <meta name="twitter:card" content="summary" />
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "VMware Vision 1.1.0: A Practical VMware Activity Trail in Splunk", "description": "Install VMware Vision and its ingestion add-on, configure VMware and CIM data models, and understand what syslog can tell you about VM changes.", "author": {"@type": "Person", "name": "Majid Ershadi", "url": "https://majidershadi.github.io/"}, "datePublished": "2026-09-17", "dateModified": "2026-09-17", "mainEntityOfPage": "https://majidershadi.github.io/articles/vmware-vision-1-1/", "about": ["VMware syslog", "Splunk Enterprise", "CIM", "Data models"]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "VMware Vision 1.1.0: A Practical VMware Activity Trail in Splunk", "description": "Install VMware Vision and its ingestion add-on, configure VMware and CIM data models, and understand what syslog can tell you about VM changes.", "author": {"@type": "Person", "name": "Majid Ershadi", "url": "https://majidershadi.github.io/"}, "datePublished": "2026-09-17", "dateModified": "2026-09-18", "mainEntityOfPage": "https://majidershadi.github.io/articles/vmware-vision-1-1/", "about": ["VMware syslog", "Splunk Enterprise", "CIM", "Data models"]}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -67,7 +67,7 @@
 <p>If Aria forwards the same vCenter records that arrive through another route, expect duplicates. Keep a single delivery route where practical, or understand how the totals differ: some audit panels deduplicate event identity, while data-model summaries count received records.</p>
 
 <h2 id="app-and-technical-addon">The app and the technical add-on</h2>
-<p>There are two installation packages. The full <code>vmware_vision</code> app, version 1.1.0, supplies search-time normalization, dashboards, reports, models and CIM mappings. <code>TA-vmware-vision</code>, version 1.0.1, supplies event boundaries, timestamp settings and character encoding for the raw parsing tier.</p>
+<p>There are two installation packages. The full <code>vmware_vision</code> app, version 1.1.0, supplies search-time normalization, dashboards, reports, models and CIM mappings. <code>TA-vmware-vision</code>, version 1.0.2, supplies event boundaries, timestamp settings and character encoding for the raw parsing tier.</p>
 
 <pre><code>VMware syslog → collector → heavy forwarder → indexers
                               ingestion TA       ↑
@@ -83,6 +83,38 @@
 </tbody></table>
 
 <p>The TA has no Python lookup or dashboards. The search head distributes the app's search-time knowledge through the search bundle. Installing the TA on an indexer does not repair a missing search-time lookup script. Neither package creates an index, opens a network listener or configures forwarding.</p>
+
+<p>Both packages share one <a href="https://github.com/majidershadi/vmware-vision">source repository</a> so their raw parsing settings stay aligned. They have separate versions and archives. The eye-and-VM icon identifies the app; the beacon-and-VM icon identifies the ingestion TA.</p>
+<p><img src="/assets/ta-vmware-vision.png" width="96" height="96" alt="TA-vmware-vision beacon and virtual machine icon" loading="lazy" /></p>
+
+<h2 id="ta-configuration">Configure the TA on a heavy forwarder</h2>
+<p>The TA has no setup screen or credentials to enter. Install <a href="https://github.com/majidershadi/vmware-vision/releases/tag/ta-v1.0.2">TA-vmware-vision 1.0.2</a> on the HF that first parses the raw records. Keep collection inputs and forwarding in your managed collection app. This example assumes a syslog collector writes separate files on that HF.</p>
+<ol>
+<li>Create or select the destination index on the indexing tier. The example uses <code>vmware</code>. Set retention and search-role access for your environment.</li>
+<li>Make sure the Splunk service account can read the collector files. Add only the required monitors to your collection app's <code>local/inputs.conf</code>, replacing the paths below.</li>
+<li>Check the HF's existing <code>outputs.conf</code> or indexer discovery configuration. It must forward to the intended indexing tier with your site's transport settings. The TA does not configure forwarding.</li>
+<li>Verify the effective input and parsing settings, then apply any required restart through your normal deployment process.</li>
+</ol>
+<pre><code>[monitor:///var/log/remote/vcenter/*.log]
+index = vmware
+sourcetype = vmware:vision:vcenter
+disabled = 0
+
+[monitor:///var/log/remote/esxi/*.log]
+index = vmware
+sourcetype = vmware:vision:esxi
+disabled = 0
+
+[monitor:///var/log/remote/aria/*.log]
+index = vmware
+sourcetype = vmware:vision:aria
+disabled = 0</code></pre>
+<p>Run these checks as the Splunk service account on the relevant HF:</p>
+<pre><code>/opt/splunk/bin/splunk btool inputs list --debug
+/opt/splunk/bin/splunk btool outputs list --debug
+/opt/splunk/bin/splunk btool props list vmware:vision:vcenter --debug</code></pre>
+<p>The packaged examples under <code>TA-vmware-vision/README/examples/</code> are disabled until adapted and enabled. Choose file monitoring or a suitable listener for each stream; using both can duplicate records. If a UF monitors the collector files, place its inputs on the UF and the TA on the first full parsing tier downstream. Do not edit the TA's default files or add another listener on a port already used by the collector.</p>
+<p>Follow the <a href="https://github.com/majidershadi/vmware-vision/blob/main/docs/TA_CONFIGURATION.md">complete TA configuration guide</a> for input choices, index placement, forwarding and acceptance checks. TA 1.0.2 changes the icon and documentation; parsing behavior is unchanged, so this update does not require reindexing or rebuilding models. See Splunk's <a href="https://help.splunk.com/splunk-cloud-platform/get-data-in/get-started-getting-data-in/9.3.2411/get-data-from-files-and-directories/monitor-files-and-directories-with-inputs.conf">file monitoring documentation</a> for input options.</p>
 
 <h2 id="install-and-check">Install and check the first records</h2>
 <ol>
@@ -192,6 +224,7 @@ make release</code></pre>
 <li><a href="#what-the-events-can-tell-you">What the events can tell you</a></li>
 <li><a href="#choose-the-sources">Choose the sources deliberately</a></li>
 <li><a href="#app-and-technical-addon">The app and the technical add-on</a></li>
+<li><a href="#ta-configuration">Configure the TA on a heavy forwarder</a></li>
 <li><a href="#install-and-check">Install and check the first records</a></li>
 <li><a href="#data-model-setup">Set up the VMware data models</a></li>
 <li><a href="#cim-and-enterprise-security">CIM and Enterprise Security</a></li>
