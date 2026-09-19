@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>VMware Vision 1.1.0: A Practical VMware Activity Trail in Splunk — Majid Ershadi</title>
+<title>VMware Vision 1.1.1: A Practical VMware Activity Trail in Splunk — Majid Ershadi</title>
 <meta name="description" content="Install VMware Vision and its ingestion add-on, configure VMware and CIM data models, and understand what syslog can tell you about VM changes." />
 <meta name="referrer" content="strict-origin-when-cross-origin" />
 <meta name="theme-color" content="#14161a" />
@@ -11,14 +11,14 @@
 <link rel="stylesheet" href="/assets/site.css" />
 <link rel="alternate" type="application/rss+xml" title="Majid Ershadi Articles" href="/articles/feed.xml" />
 <meta property="og:type" content="article" />
-<meta property="og:title" content="VMware Vision 1.1.0: A Practical VMware Activity Trail in Splunk" />
+<meta property="og:title" content="VMware Vision 1.1.1: A Practical VMware Activity Trail in Splunk" />
 <meta property="og:description" content="Install VMware Vision and its ingestion add-on, configure VMware and CIM data models, and understand what syslog can tell you about VM changes." />
 <meta property="og:url" content="https://majidershadi.github.io/articles/vmware-vision-1-1/" />
 <meta property="article:published_time" content="2026-09-17" />
 <meta property="article:modified_time" content="2026-09-17" />
 <meta property="article:author" content="Majid Ershadi" />
 <meta name="twitter:card" content="summary" />
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "VMware Vision 1.1.0: A Practical VMware Activity Trail in Splunk", "description": "Install VMware Vision and its ingestion add-on, configure VMware and CIM data models, and understand what syslog can tell you about VM changes.", "author": {"@type": "Person", "name": "Majid Ershadi", "url": "https://majidershadi.github.io/"}, "datePublished": "2026-09-17", "dateModified": "2026-09-18", "mainEntityOfPage": "https://majidershadi.github.io/articles/vmware-vision-1-1/", "about": ["VMware syslog", "Splunk Enterprise", "CIM", "Data models"]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "VMware Vision 1.1.1: A Practical VMware Activity Trail in Splunk", "description": "Install VMware Vision and its ingestion add-on, configure VMware and CIM data models, and understand what syslog can tell you about VM changes.", "author": {"@type": "Person", "name": "Majid Ershadi", "url": "https://majidershadi.github.io/"}, "datePublished": "2026-09-17", "dateModified": "2026-09-19", "mainEntityOfPage": "https://majidershadi.github.io/articles/vmware-vision-1-1/", "about": ["VMware syslog", "Splunk Enterprise", "CIM", "Data models"]}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -33,20 +33,20 @@
 <article class="article">
 <header class="article-header">
 <p class="kicker">Splunk engineering · VMware · Operations</p>
-<h1 class="article-title">VMware Vision 1.1.0: A Practical VMware Activity Trail in Splunk</h1>
+<h1 class="article-title">VMware Vision 1.1.1: A Practical VMware Activity Trail in Splunk</h1>
 <p class="article-deck">Follow recorded VM changes, put parsing on the right tier, and configure data models without confusing requests, diagnostics and completed operations.</p>
-<div class="meta"><time datetime="2026-09-17">Published September 17, 2026</time><span>Release examined: 1.1.0</span><span>By Majid Ershadi</span></div>
+<div class="meta"><time datetime="2026-09-17">Published September 17, 2026</time><span>Release examined: 1.1.1</span><span>By Majid Ershadi</span></div>
 </header>
 <div class="article-body">
 <img src="/assets/vmware-vision.png" width="96" height="96" alt="VMware Vision eye and virtual machine icon" />
 
 <p>A VM has changed, and the first questions are usually simple: what happened, when did it happen, and who did it? The answer is often spread across vCenter events, ESXi messages and a syslog relay. A search for the VM name helps, but it also brings back service messages, task requests and repeated copies of the same event.</p>
 
-<p>VMware Vision puts those recorded events into a usable activity trail in Splunk. Version 1.1.0 covers VM creation, removal, power operations, configuration changes, migration and snapshots, together with related users, failures and infrastructure events. It includes dashboards, two custom data models and scoped mappings into CIM Authentication and Change.</p>
+<p>VMware Vision puts those recorded events into a usable activity trail in Splunk. Version 1.1.1 covers VM creation, removal, power operations, configuration changes, migration and snapshots, together with related users, failures and infrastructure events. It includes dashboards, two custom data models and scoped mappings into CIM Authentication and Change.</p>
 
 <p>This release works with logs you already collect. <strong>It does not poll vCenter, ESXi or Aria APIs.</strong> API collection may be added in a future release, but there is no schedule or API collector in this version. The application also does not maintain a complete live inventory or change VMware settings.</p>
 
-<p><a href="https://github.com/majidershadi/vmware-vision">Source and documentation</a> · <a href="https://github.com/majidershadi/vmware-vision/releases">Installation packages</a></p>
+<p><a href="https://github.com/majidershadi/vmware-vision">Source and documentation</a> · <a href="https://github.com/majidershadi/vmware-vision/releases/tag/v1.1.1">Installation packages</a></p>
 
 <h2 id="what-the-events-can-tell-you">What the events can tell you</h2>
 <p>The overview shows recent activity, users and failures. VM History follows an individual VM through recorded events. Configuration and Change Audit shows changes when the source supplies the details. Operations and Security brings together authentication, permissions, alarms, host events and tasks. Setup and Coverage helps explain missing fields and unmapped records.</p>
@@ -67,7 +67,7 @@
 <p>If Aria forwards the same vCenter records that arrive through another route, expect duplicates. Keep a single delivery route where practical, or understand how the totals differ: some audit panels deduplicate event identity, while data-model summaries count received records.</p>
 
 <h2 id="app-and-technical-addon">The app and the technical add-on</h2>
-<p>There are two installation packages. The full <code>vmware_vision</code> app, version 1.1.0, supplies search-time normalization, dashboards, reports, models and CIM mappings. <code>TA-vmware-vision</code>, version 1.0.2, supplies event boundaries, timestamp settings and character encoding for the raw parsing tier.</p>
+<p>There are two installation packages. The full <code>vmware_vision</code> app, version 1.1.1, supplies search-time normalization, dashboards, reports, models and CIM mappings. <code>TA-vmware-vision</code>, version 1.0.2, supplies event boundaries, timestamp settings and character encoding for the raw parsing tier.</p>
 
 <pre><code>VMware syslog → collector → heavy forwarder → indexers
                               ingestion TA       ↑
@@ -159,7 +159,7 @@ disabled = 0</code></pre>
 <h2 id="cim-and-enterprise-security">CIM and Enterprise Security</h2>
 <p>Install Splunk_SA_CIM on the search tier if you need its models. In Enterprise Security, use the CIM version supported by that ES deployment instead of independently replacing it to match a lab.</p>
 
-<p>Version 1.1.0 maps explicit login outcomes into Authentication and selected VM change outcomes into Change. It preserves the original VMware operation in <code>vmware_action</code>. The shared <code>action</code> field uses CIM values for eligible records.</p>
+<p>Version 1.1.1 maps explicit login outcomes into Authentication and selected VM change outcomes into Change. It preserves the original VMware operation in <code>vmware_action</code>. The shared <code>action</code> field uses CIM values for eligible records.</p>
 
 <table><thead><tr><th>Recorded event</th><th>VMware operation</th><th>CIM result</th></tr></thead><tbody>
 <tr><td>Successful VM power-on</td><td><code>power_on</code></td><td>Change: <code>action=started</code>, <code>status=success</code></td></tr>
@@ -188,6 +188,10 @@ disabled = 0</code></pre>
 <p>Run those as two separate searches. The VMware macro and the two CIM macros are separate scopes. Installing CIM does not connect every index automatically, and enabling CIM acceleration does not enable VMware Vision Activity. Check each ES detection's required datasets and fields before using it with these events.</p>
 
 <h2 id="upgrades-and-troubleshooting">Upgrades and common problems</h2>
+<p><strong>1.1.1 update:</strong> The CSV lookup now quotes the three input keys in each returned row. This fixes missing parser fields on records with leading or trailing whitespace without changing the stored event. Explicit ESXi Hostd logout records are recognized as events; routine Envoy access logs and known UI/SPS messages are diagnostics. An HTTP 200 response does not prove that a VM operation completed. Logout remains excluded from the initial CIM Authentication mapping.</p>
+<p>Upgrade the full app on the search tier. TA 1.0.2 is unchanged. Start a fresh search and check <code>parser_version=1.1.1</code> on every peer. Setup and Coverage labels absent lookup results <code>lookup_missing</code>; <code>unclassified</code> means the parser ran but did not recognize the record. Rebuild affected accelerated summaries during a suitable maintenance window if historical results need the corrected fields. No reindexing is required.</p>
+<p>CRLF was an additional synthetic edge-case test; it is not required by the app, and no VMware or Splunk collection setting was changed to use it. The reported production failure involved trailing whitespace. One limitation remains: events containing embedded CRLF line breaks did not match in the lab's scripted lookup, despite exact byte preservation in the CSV round-trip test. Single-line whitespace and embedded LF cases passed. If your collector combines records using CRLF, validate those samples before relying on this version. The <a href="https://github.com/majidershadi/vmware-vision/blob/main/docs/TROUBLESHOOTING.md">troubleshooting guide</a> records the tested scope.</p>
+
 <p>When upgrading from 1.0.x, change custom native-action filters such as <code>action=power_on</code> to <code>vmware_action=power_on</code>. The bundled dashboards already use the new field. Review local lookup output lists and local model definitions, because they can override the new defaults. Rebuild enabled model summaries after the schema or mapping changes. Raw events do not need reindexing for these search-time changes.</p>
 
 <p>If the lookup works inside VMware Vision but fails in Search &amp; Reporting, inspect sharing and the search bundle before changing Splunk versions. The automatic props rule, transform and <code>searchscripts/vmware_lookup.py</code> metadata must all be visible in the search context. The parser and CIM module must travel with the script. A stale local override can survive an app upgrade.</p>
