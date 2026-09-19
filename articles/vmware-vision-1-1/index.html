@@ -187,6 +187,23 @@ disabled = 0</code></pre>
 
 <p>Run those as two separate searches. The VMware macro and the two CIM macros are separate scopes. Installing CIM does not connect every index automatically, and enabling CIM acceleration does not enable VMware Vision Activity. Check each ES detection's required datasets and fields before using it with these events.</p>
 
+<h2 id="understand-coverage">Understand missing and unclassified results</h2>
+<p>The useful measure is whether a known VM operation has the right identity, actor, outcome and change details. Coverage charts describe the incoming syslog mix. A large unclassified count alone does not show lost data or tell you how accurate VM history is.</p>
+<table><thead><tr><th>Label</th><th>Meaning</th><th>Next check</th></tr></thead><tbody>
+<tr><td><code>lookup_missing</code> or <code>MISSING</code></td><td>A dashboard or search placeholder for absent normalization fields.</td><td>Check lookup/parser errors, matching, overrides and peer bundle versions.</td></tr>
+<tr><td><code>unclassified</code> / <code>unmapped</code></td><td>The parser returned a result but did not recognize the message shape.</td><td>Inspect examples to distinguish service output, unsupported events and fragments.</td></tr>
+<tr><td><code>unmapped_event_type</code></td><td>An event-type name was extracted without a mapped operation.</td><td>Verify the underlying record; it does not establish a completed change.</td></tr>
+<tr><td><code>diagnostic</code></td><td>A recognized service-log format.</td><td>Retain it for troubleshooting. Service errors may still matter.</td></tr>
+<tr><td><code>identity_quality=missing</code></td><td>No VM name, managed object ID or UUID was extracted.</td><td>Compare VM event candidates with the raw message for absent, ambiguous, incomplete or missed identity.</td></tr>
+<tr><td><code>mapped</code></td><td>A known operation was selected.</td><td>Check identity and outcome against the raw record; mapping alone is not proof of correct audit data.</td></tr>
+</tbody></table>
+<p>The identity panel already selects VM event candidates. Routine non-VM traffic alone does not explain missing identities there. Likewise, <em>message only</em> means the parser did not extract structured change details; those details may still exist in the raw message. Raw events remain searchable.</p>
+<h3 id="known-111-audit-limitations">Known 1.1.1 audit limitations</h3>
+<p>Additional production examples reviewed after release showed unresolved parser issues. Name-first power messages and <code>Message on example-vm ...</code> can lose a supplied VM name. InventoryMonitor messages that merely mention <code>Event value type: vim.event.VmPoweredOffEvent</code> can be incorrectly counted as completed power-off events and mapped into CIM Change. Filtering for <code>mapped</code> alone does not correct that false positive.</p>
+<p>Reconfiguration's <code>Modified:</code>, <code>Added:</code> and <code>Deleted:</code> sections are not fully covered. Incomplete bracketed records can fall back to generic extraction and use a nested device/configuration <code>key</code> as the event ID. Records sharing a header event ID but containing different parts of its body suggest fragmentation; the evidence does not establish whether the sender, collector or another stage caused it. A final closing bracket alone does not prove a complete record.</p>
+<p><strong>These issues need a parser update; this documentation update does not fix them.</strong> The 1.1.1 whitespace fix remains valid. Check affected VM histories and CIM Change results against the original records before treating their totals or observed state as authoritative. The <a href="https://github.com/majidershadi/vmware-vision#reading-coverage-results">README</a> records the limitations and the meaning of each coverage label.</p>
+<p>Development should prioritize reliable VM lifecycle, configuration and security records. Routine diagnostic classification is secondary. Fragments should only be joined with reliable origin, event and fragment information, never timestamp proximity alone. Acceleration can make searches faster, but cannot repair their input. This clarification changes no collection filter, retention setting or TA configuration.</p>
+
 <h2 id="upgrades-and-troubleshooting">Upgrades and common problems</h2>
 <p><strong>1.1.1 update:</strong> The CSV lookup now quotes the three input keys in each returned row. This fixes missing parser fields on records with leading or trailing whitespace without changing the stored event. Explicit ESXi Hostd logout records are recognized as events; routine Envoy access logs and known UI/SPS messages are diagnostics. An HTTP 200 response does not prove that a VM operation completed. Logout remains excluded from the initial CIM Authentication mapping.</p>
 <p>Upgrade the full app on the search tier. TA 1.0.2 is unchanged. Start a fresh search and check <code>parser_version=1.1.1</code> on every peer. Setup and Coverage labels absent lookup results <code>lookup_missing</code>; <code>unclassified</code> means the parser ran but did not recognize the record. Rebuild affected accelerated summaries during a suitable maintenance window if historical results need the corrected fields. No reindexing is required.</p>
@@ -232,6 +249,7 @@ make release</code></pre>
 <li><a href="#install-and-check">Install and check the first records</a></li>
 <li><a href="#data-model-setup">Set up the VMware data models</a></li>
 <li><a href="#cim-and-enterprise-security">CIM and Enterprise Security</a></li>
+<li><a href="#understand-coverage">Understand coverage and known limits</a></li>
 <li><a href="#upgrades-and-troubleshooting">Upgrades and common problems</a></li>
 <li><a href="#build-and-validation">Build and validation</a></li>
 </ol>
