@@ -38,7 +38,7 @@
 <div class="meta"><time datetime="2026-09-17">Published September 17, 2026</time><span>Release examined: 2.0.0 · Updated October 15, 2026</span><span>By Majid Ershadi</span></div>
 </header>
 <div class="article-body">
-<p><img alt="VMware Vision eye and virtual machine icon" src="/assets/vmware-vision.png" /></p>
+<p><img alt="VMware Vision eye and virtual machine icon" src="/assets/vmware-vision.png" width="96" height="96" /></p>
 <p>A useful VM audit starts with a few questions: which VM changed, who changed it, when, and what was the outcome? Service logs can help an investigation, but their volume can hide the records that answer those questions.</p>
 <p>VMware Vision 2.0 changes how the application processes that data. Native configuration in the technical add-on replaces the automatic Python lookup used by earlier versions. The main Overview reads a small set of indexed fields through one shared tstats search. Detailed investigations and older raw data use native field extraction.</p>
 <p>This article was first published for 1.1 and is updated for 2.0.0. The app still uses existing vCenter, ESXi and Aria syslog. <strong>It does not poll VMware APIs, collect live inventory or change VMware settings.</strong> API collection may be considered in a future release; no API collector is included now.</p>
@@ -74,7 +74,7 @@
 </table>
 <p><strong>Install both packages on standalone Splunk. Search heads now require the TA too.</strong> If an HF first parses raw syslog, apply the TA there. If indexers first parse the raw input, deploy it there instead. Already cooked data does not need a second parsing pass downstream. The TA on search heads distributes search knowledge to peers; that bundle does not configure upstream ingestion.</p>
 <p>The app retains its eye-and-VM icon. The TA uses the beacon-and-VM icon:</p>
-<p><img alt="TA-vmware-vision beacon and virtual machine icon" src="/assets/ta-vmware-vision.png" /></p>
+<p><img alt="TA-vmware-vision beacon and virtual machine icon" src="/assets/ta-vmware-vision.png" width="96" height="96" /></p>
 <h2 id="ta-configuration">Configure the TA</h2>
 <ol>
 <li>Record the collection route, indexes, sourcetypes and search-role permissions. Back up both existing apps, local settings and local metadata before upgrading.</li>
