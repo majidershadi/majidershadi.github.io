@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>VMware Vision 2.0.0: A Practical VMware Activity Trail in Splunk — Majid Ershadi</title>
+<title>VMware Vision 2.0.1: A Practical VMware Activity Trail in Splunk — Majid Ershadi</title>
 <meta name="description" content="Install VMware Vision and its native technical add-on, configure VMware and CIM data models, and understand what syslog can tell you about VM changes." />
 <meta name="referrer" content="strict-origin-when-cross-origin" />
 <meta name="theme-color" content="#14161a" />
@@ -11,14 +11,14 @@
 <link rel="stylesheet" href="/assets/site.css" />
 <link rel="alternate" type="application/rss+xml" title="Majid Ershadi Articles" href="/articles/feed.xml" />
 <meta property="og:type" content="article" />
-<meta property="og:title" content="VMware Vision 2.0.0: A Practical VMware Activity Trail in Splunk" />
+<meta property="og:title" content="VMware Vision 2.0.1: A Practical VMware Activity Trail in Splunk" />
 <meta property="og:description" content="Install VMware Vision and its native technical add-on, configure VMware and CIM data models, and understand what syslog can tell you about VM changes." />
 <meta property="og:url" content="https://majidershadi.github.io/articles/vmware-vision-1-1/" />
 <meta property="article:published_time" content="2026-09-17" />
-<meta property="article:modified_time" content="2026-10-15" />
+<meta property="article:modified_time" content="2026-10-16" />
 <meta property="article:author" content="Majid Ershadi" />
 <meta name="twitter:card" content="summary" />
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "VMware Vision 2.0.0: A Practical VMware Activity Trail in Splunk", "description": "Install VMware Vision and its native technical add-on, configure VMware and CIM data models, and understand what syslog can tell you about VM changes.", "author": {"@type": "Person", "name": "Majid Ershadi", "url": "https://majidershadi.github.io/"}, "datePublished": "2026-09-17", "dateModified": "2026-10-15", "mainEntityOfPage": "https://majidershadi.github.io/articles/vmware-vision-1-1/", "about": ["VMware syslog", "Splunk Enterprise", "CIM", "Data models"]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "VMware Vision 2.0.1: A Practical VMware Activity Trail in Splunk", "description": "Install VMware Vision and its native technical add-on, configure VMware and CIM data models, and understand what syslog can tell you about VM changes.", "author": {"@type": "Person", "name": "Majid Ershadi", "url": "https://majidershadi.github.io/"}, "datePublished": "2026-09-17", "dateModified": "2026-10-16", "mainEntityOfPage": "https://majidershadi.github.io/articles/vmware-vision-1-1/", "about": ["VMware syslog", "Splunk Enterprise", "CIM", "Data models"]}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -33,16 +33,19 @@
 <article class="article">
 <header class="article-header">
 <p class="kicker">Splunk engineering · VMware · Operations</p>
-<h1 class="article-title">VMware Vision 2.0.0: A Practical VMware Activity Trail in Splunk</h1>
+<h1 class="article-title">VMware Vision 2.0.1: A Practical VMware Activity Trail in Splunk</h1>
 <p class="article-deck">Follow recorded VM changes, put parsing on the right tier, and configure data models without confusing requests, diagnostics and completed operations.</p>
-<div class="meta"><time datetime="2026-09-17">Published September 17, 2026</time><span>Release examined: 2.0.0 · Updated October 15, 2026</span><span>By Majid Ershadi</span></div>
+<div class="meta"><time datetime="2026-09-17">Published September 17, 2026</time><span>Release examined: 2.0.1 · Updated October 16, 2026</span><span>By Majid Ershadi</span></div>
 </header>
 <div class="article-body">
 <p><img alt="VMware Vision eye and virtual machine icon" src="/assets/vmware-vision.png" width="96" height="96" /></p>
 <p>A useful VM audit starts with a few questions: which VM changed, who changed it, when, and what was the outcome? Service logs can help an investigation, but their volume can hide the records that answer those questions.</p>
 <p>VMware Vision 2.0 changes how the application processes that data. Native configuration in the technical add-on replaces the automatic Python lookup used by earlier versions. The main Overview reads a small set of indexed fields through one shared tstats search. Detailed investigations and older raw data use native field extraction.</p>
-<p>This article was first published for 1.1 and is updated for 2.0.0. The app still uses existing vCenter, ESXi and Aria syslog. <strong>It does not poll VMware APIs, collect live inventory or change VMware settings.</strong> API collection may be considered in a future release; no API collector is included now.</p>
-<p><a href="https://github.com/majidershadi/vmware-vision/releases/tag/v2.0.0">Download both packages</a> · <a href="https://github.com/majidershadi/vmware-vision">Source and documentation</a></p>
+<p>This article was first published for 1.1 and is updated for 2.0.1. The app still uses existing vCenter, ESXi and Aria syslog. <strong>It does not poll VMware APIs, collect live inventory or change VMware settings.</strong> API collection may be considered in a future release; no API collector is included now.</p>
+<p><a href="https://github.com/majidershadi/vmware-vision/releases/tag/v2.0.1">Download both packages</a> · <a href="https://github.com/majidershadi/vmware-vision">Source and documentation</a></p>
+<h2 id="patch-201">Why the 2.0.1 patch matters</h2>
+<p>A review of 2.0.0 found cases where indexed and detailed results disagreed. This patch aligns failure handling, removes JSON property-order filtering, checks fragment numbers in the header, handles quoted event types and plain syslog envelopes, and restores login source IP and task ID fields.</p>
+<p><strong>Upgrade both packages.</strong> Corrected arrivals use <code>vv_schema=2.0.1</code>. Overview intentionally excludes older <code>vv_schema=2</code> records because their stored metadata may be wrong. Use Historical Activity and native detailed searches for that period. The upgrade preserves raw data and does not automatically replay or reindex it. Rebuild affected accelerated VMware/CIM summaries after the search rules are deployed. The <a href="https://github.com/majidershadi/vmware-vision/blob/main/docs/MIGRATION_2.0.1.md">patch migration guide</a> includes deployment, verification and rollback steps.</p>
 <h2 id="what-the-events-can-tell-you">What the events can tell you</h2>
 <p>The app follows supported VM creation, removal, power, configuration, migration and snapshot events, plus users, failures and operational context. A requested action does not establish a completed outcome. Last observed state describes received history; it is not current inventory.</p>
 <p>Version 2.0 corrects the supplied name-first power messages and Message-on VM names, keeps event IDs separate from nested configuration keys, and extracts Modified/Added/Deleted details when present. InventoryMonitor messages that merely mention an event class no longer establish a completed power-off or CIM Change.</p>
@@ -61,12 +64,12 @@
 </thead>
 <tbody>
 <tr>
-<td>VMware Vision app 2.0.0</td>
+<td>VMware Vision app 2.0.1</td>
 <td>Dashboards, custom models and the UCC logging page</td>
 <td>Search heads</td>
 </tr>
 <tr>
-<td>TA-vmware-vision 2.0.0</td>
+<td>TA-vmware-vision 2.0.1</td>
 <td>Native ingest classification, field extraction, CSV event mapping and CIM tags</td>
 <td>First full parser and search heads</td>
 </tr>
@@ -78,7 +81,7 @@
 <h2 id="ta-configuration">Configure the TA</h2>
 <ol>
 <li>Record the collection route, indexes, sourcetypes and search-role permissions. Back up both existing apps, local settings and local metadata before upgrading.</li>
-<li>Download the two 2.0.0 installation archives and verify the release's SHA256SUMS.txt. The GitHub source ZIP is not a Splunk install package.</li>
+<li>Download the two 2.0.1 installation archives and verify the release's SHA256SUMS.txt. The GitHub source ZIP is not a Splunk install package.</li>
 <li>Deploy the TA to the first full parser and search heads. Use the cluster manager for an indexer cluster and the deployer for a search head cluster. Install the full app on search heads.</li>
 <li>Keep existing listeners, file monitors, forwarding and index definitions in their managed collection apps. Neither package enables collection or creates indexes.</li>
 <li>Assign <code>vmware:vision:vcenter</code>, <code>vmware:vision:esxi</code>, <code>vmware:vision:aria</code> or <code>vmware:vision:json</code> as appropriate. Typed JSON needs supported explicit event fields; assigning a VMware sourcetype cannot create missing source content.</li>
@@ -90,14 +93,14 @@
 /opt/splunk/bin/splunk btool fields list vv_schema --debug
 /opt/splunk/bin/splunk btool check
 </code></pre>
-<p>The TA has no Python runtime dependency or API credentials. The app's UCC Python runtime supports its configuration page, independently of event parsing. Follow the <a href="https://github.com/majidershadi/vmware-vision/blob/main/docs/TA_CONFIGURATION.md">TA guide</a> and <a href="https://github.com/majidershadi/vmware-vision/blob/main/docs/MIGRATION_2.0.md">migration procedure</a> for deployment and rollback.</p>
+<p>The TA has no Python runtime dependency or API credentials. The app's UCC Python runtime supports its configuration page, independently of event parsing. Follow the <a href="https://github.com/majidershadi/vmware-vision/blob/main/docs/TA_CONFIGURATION.md">TA guide</a> and <a href="https://github.com/majidershadi/vmware-vision/blob/main/docs/MIGRATION_2.0.1.md">migration procedure</a> for deployment and rollback.</p>
 <h2 id="install-and-check">Install and check the first records</h2>
 <p>Set <code>vmware_vision_indexes</code> in Settings → Advanced search → Search macros. A definition such as <code>(index=vmware-vcenter OR index=vmware-esxi OR index=log-insight)</code> scopes the app. Ensure roles can read each index.</p>
 <p>New arrivals through the TA receive five indexed fields: <code>vv_schema</code>, <code>vv_record_class</code>, <code>vv_event_type</code>, <code>vv_vcenter</code> and <code>vv_failure</code>. Large change bodies and arbitrary VM attributes are not custom indexed fields. Raw content is preserved.</p>
-<pre><code class="language-spl">| tstats count WHERE index=vmware-vcenter vv_schema=&quot;2&quot;
+<pre><code class="language-spl">| tstats count WHERE index=vmware-vcenter vv_schema=&quot;2.0.1&quot;
   BY vv_record_class vv_event_type vv_vcenter
 </code></pre>
-<p>The main Overview covers those new schema-2 records. It can be empty immediately after an upgrade even when older raw data exists. Open <strong>Historical Activity</strong> for old data and native detailed searches. No automatic backfill or reindexing occurs. Compare a known VM operation with its raw record in both VMware Vision and Search &amp; Reporting.</p>
+<p>The main Overview covers those new schema-2.0.1 records. It can be empty immediately after an upgrade even when older raw data exists. Open <strong>Historical Activity</strong> for old data and native detailed searches. No automatic backfill or reindexing occurs. Compare a known VM operation with its raw record in both VMware Vision and Search &amp; Reporting.</p>
 <p>The indexed view counts received records, including duplicates. Historical audit panels may deduplicate by available event identity. Those totals have different meanings. Review the indexed event-hour coverage before relying on the view.</p>
 <h2 id="data-model-setup">Set up the VMware data models</h2>
 <p>The app provides detailed <code>VMware_Vision</code> and compact <code>VMware_Vision_Activity</code> models. Both use the VMware index macro and native fields supplied by the TA. CIM is not required for these custom models. The main Overview uses indexed fields directly and does not require acceleration.</p>
@@ -164,7 +167,7 @@
 </table>
 <p>The 1.1.1 post-release findings remain documented in its historical release notes. Version 2.0 fixes the reproduced patterns through the native path, but does not claim every VMware log format is supported. Useful audit accuracy takes priority over classifying every diagnostic.</p>
 <h2 id="upgrades-and-troubleshooting">Upgrades and common problems</h2>
-<p>If the indexed Overview is empty, check new-arrival <code>vv_schema=2</code> metadata at the first parser. If native fields are absent, check the TA on search heads and peers. If Python event normalization still runs, inspect local overrides of the retired automatic rule. If detailed raw searches are slow, narrow time/index/VM filters and use the indexed aggregate view where its coverage fits.</p>
+<p>If the indexed Overview is empty, check new-arrival <code>vv_schema=2.0.1</code> metadata at the first parser. If native fields are absent, check the TA on search heads and peers. If Python event normalization still runs, inspect local overrides of the retired automatic rule. If detailed raw searches are slow, narrow time/index/VM filters and use the indexed aggregate view where its coverage fits.</p>
 <p>The old scripted CSV lookup's CRLF-matching path is removed from routine processing. CRLF is not required by the application, and no sender setting is changed. Validate actual multiline boundaries and retained raw text. Native extraction cannot restore content already lost or safely join arbitrary fragments.</p>
 <p>Rollback restores both packages and their local settings through the same deployment mechanism. Existing indexed metadata remains stored; do not delete raw indexes. Historical indexed fields would require a separately planned reingestion project, while native historical extraction requires no reindex.</p>
 <h2 id="build-and-validation">Build and validation</h2>
@@ -175,10 +178,10 @@ python3 -m venv .venv
 make release
 </code></pre>
 <p>Build on Linux/WSL with Python 3.10 or newer, Git and GNU Make. UCC 6.6.0 builds the app; the TA generator packages native configuration. Development scripts, reference decoder, tests, credentials and lab data are excluded from install archives. See the <a href="https://github.com/majidershadi/vmware-vision/blob/main/docs/BUILD.md">build guide</a>.</p>
-<p>The lab uses standalone Splunk 10.4.1 and CIM 8.7.0. All 64 offline checks passed under Splunk Python 3.9 and 3.13. Fourteen live fixtures verified native and indexed fields, raw preservation and exclusions. Both custom models returned ten eligible event records; CIM returned one Authentication and six Change records. The indexed Overview matched the same ten records.</p>
-<p>A controlled 5,000-record comparison had median job durations of 0.108 seconds with native fields, 0.782 seconds when adding the explicit legacy Python lookup, and 0.040 seconds with indexed tstats. One indexed trial took 1.264 seconds. The source format was a single common event shape with distinct header IDs; lookup-cache reuse was avoided for the legacy comparison. These figures demonstrate the tested paths, not production capacity or a guaranteed response time. All samples and conditions are attached to the release.</p>
+<p>The patch is checked on standalone Splunk 10.4.1 with CIM 8.7.0. The test suite has 67 offline checks and 40 synthetic live cases covering native fields, indexed classifications, dashboard filters and raw preservation. Separate checks cover VMware/CIM model membership and the old-schema fallback. Full acceptance evidence is attached to the release. These tests do not certify a distributed production topology.</p>
+<p>The earlier 2.0.0 controlled 5,000-record comparison had median job durations of 0.108 seconds with native fields, 0.782 seconds when adding the explicit legacy Python lookup, and 0.040 seconds with indexed tstats. One indexed trial took 1.264 seconds. The source format was a single common event shape with distinct header IDs; lookup-cache reuse was avoided for the legacy comparison. These figures demonstrate the tested paths, not production capacity or a guaranteed response time. Those timing samples remain attached to the <a href="https://github.com/majidershadi/vmware-vision/releases/tag/v2.0.0">2.0.0 release</a>; they are not a new 2.0.1 performance claim.</p>
 <p>Native Linux AppInspect found no errors, failures or future failures. The app retains ten advisory warnings; the TA has none. Local inspection is not Splunkbase or Cloud approval. Splunk 10.0.2 distributed acceptance, real sender delivery, ingest queues, index growth and production concurrency still need checks in the target topology. The release remains beta.</p>
-<p>The project is licensed under Apache 2.0. <a href="https://github.com/majidershadi/vmware-vision/blob/main/docs/RELEASE_2.0.0.md">Release notes</a>, <a href="https://github.com/majidershadi/vmware-vision/blob/main/docs/MIGRATION_2.0.md">migration guide</a> and <a href="https://github.com/majidershadi/vmware-vision/issues">GitHub Issues</a> are available. Include sanitized examples and expected fields when reporting a problem.</p>
+<p>The project is licensed under Apache 2.0. <a href="https://github.com/majidershadi/vmware-vision/blob/main/docs/RELEASE_2.0.1.md">Release notes</a>, <a href="https://github.com/majidershadi/vmware-vision/blob/main/docs/MIGRATION_2.0.1.md">migration guide</a> and <a href="https://github.com/majidershadi/vmware-vision/issues">GitHub Issues</a> are available. Include sanitized examples and expected fields when reporting a problem.</p>
 
 </div>
 </article>
