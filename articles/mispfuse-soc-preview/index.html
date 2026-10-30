@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MISPFuse SOC Preview: Intelligence in the Investigation — Majid Ershadi</title>
+<meta name="description" content="A development update on MISP searches, enrichment, snapshot freshness and reviewed contributions in MISPFuse, including current limits." />
+<link rel="canonical" href="https://majidershadi.github.io/articles/mispfuse-soc-preview/" />
+<link rel="stylesheet" href="/assets/site.css" />
+<meta property="og:type" content="article" /><meta property="og:title" content="MISPFuse SOC Preview: Intelligence in the Investigation" />
+<meta property="og:description" content="What is changing in MISPFuse, what the lab has verified, and what is not ready to replace yet." />
+<meta property="og:url" content="https://majidershadi.github.io/articles/mispfuse-soc-preview/" />
+<meta name="twitter:card" content="summary" />
+</head><body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-shell"><nav class="site-nav" aria-label="Primary"><a class="site-brand" href="/">Majid Ershadi<span class="dot">.</span></a><ul class="site-tabs"><li><a href="/">Profile</a></li><li><a href="/articles/" aria-current="page">Articles</a></li></ul></nav></header>
+<main id="main" class="page-main"><div class="article-layout"><article class="article">
+<header class="article-header"><p class="kicker">Development preview · Threat intelligence · SOC workflows</p>
+<h1 class="article-title">MISPFuse SOC Preview: Intelligence in the Investigation</h1>
+<p class="article-deck">Looking up an indicator is easy. Knowing whether the lookup finished, keeping its context, and reviewing what goes back to MISP take more care.</p>
+<div class="meta"><time datetime="2026-10-30">October 30, 2026</time><span>Unreleased development work</span><span>By Majid Ershadi</span></div></header>
+<div class="article-body">
+<p>MISPFuse started with the outbound path: move selected Splunk results into MISP through named accounts and reusable mappings. The next stage brings intelligence back into the investigation.</p>
+<p>This is a development preview. The existing <a href="/articles/mispfuse-2-2-4/">2.2.4 article</a> describes the released outbound workflow. The public package does not yet include the work described here.</p>
+<h2>Three analyst workspaces</h2>
+<p><strong>Investigate</strong> searches MISP attributes and events. It shows source context and a separate completion status. A partial lookup is not a clean negative result.</p>
+<p><strong>Intelligence Library</strong> shows a bounded, manually refreshed snapshot and its freshness. A partial refresh keeps the previous active generation. It is not yet a scheduled incremental synchronization service.</p>
+<p><strong>Contribute</strong> previews an operation before submission. The current page handles a single indicator, existing-event append, sightings and separate publication. The new submission path claims an operation ID before sending; uncertain delivery requires reconciliation instead of an automatic resend.</p>
+<h2>A practical investigation</h2>
+<p>Take a domain from a DNS alert, search the selected MISP account, and examine the event behind the match. Enrich the Splunk result while retaining the original observation in a separate JSON envelope. If the observation adds useful evidence, review a sighting or contribution rather than creating another event by habit.</p>
+<p>Start with synthetic data such as <code>triage.example.test</code> or <code>192.0.2.44</code>. These examples are not threat indicators.</p>
+<h2>Permissions are part of the workflow</h2>
+<p>The new commands require both an operation-specific capability and an account role allowlist. Collection and submission need administrator-provisioned, account-scoped KV Store collections. Default configuration grants no account access. Use least-privilege MISP credentials and verified TLS for remote deployments.</p>
+<h2>What the lab caught</h2>
+<p>Tests against isolated Docker MISP 2.5.50 exercised creation, attribute and event searches, enrichment, append, sightings and publication. They caught a publication-response mismatch. The corrected path reads back the event state before reporting publication as confirmed.</p>
+<p>Testing through Splunk also caught a CSV output issue: status columns appearing only after data rows could be lost. Declaring a consistent output schema preserves the terminal status.</p>
+<p>A development package produced zero errors and zero failures in Linux AppInspect, but warnings and a future-failure flag still need review. That is not online acceptance or a final-release result.</p>
+<h2>What is still outstanding</h2>
+<p>Scheduled incremental sync, retention cleanup, cluster failover qualification, Enterprise Security export, a visual bulk/object editor and automatic migration are not complete. The MISP42 inventory helper identifies searches to review; it does not disable or replace them.</p>
+<p>Full replacement of another integration must be earned through side-by-side comparisons of the searches and alerts a team actually uses.</p>
+<h2>Project and engineering notes</h2>
+<ul><li><a href="https://github.com/majidershadi/mispfuse">Source, documentation and issues on GitHub</a></li><li><a href="https://splunkbase.splunk.com/app/9278">Current public MISPFuse package on Splunkbase</a></li><li><a href="https://medium.com/@majjid.khayatershadii/i-built-two-splunk-apps-the-hardest-part-was-compatibility-b95bc4ccf6ab">The earlier Medium compatibility story</a></li><li><a href="/articles/building-secure-splunk-apps/">Building secure Splunk apps</a></li><li><a href="https://community.splunk.com/t5/Share-a-Tip/From-the-Splunk-SDK-to-UCC-Security-and-Compatibility-Lessons/m-p/762900#M186">Related Splunk Community discussion</a></li></ul>
+</div></article></div></main>
+<footer class="site-footer"><div class="site-shell">Majid Ershadi · Security architecture and application security</div></footer>
+</body></html>
