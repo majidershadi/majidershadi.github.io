@@ -3,22 +3,23 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>SC4S in Production: What Broke, Why I Changed the Architecture, and How I Fixed It — Majid Ershadi</title>
-<meta name="description" content="A field guide to Splunk Connect for Syslog built from a real FortiGate and Bitdefender migration: architecture decisions, HEC, metadata, parsing order, SEDCMD, custom parsers, buffering, high-load tuning, macvlan, and troubleshooting." />
+<title>SC4S Production Guide: HEC, Parsing &amp; Buffering | Majid Ershadi</title>
+<meta name="description" content="A FortiGate and Bitdefender migration to Splunk Connect for Syslog: HEC index routing, JSON parsing, disk buffering, and production troubleshooting." />
 <meta name="referrer" content="strict-origin-when-cross-origin" />
 <meta name="theme-color" content="#14161a" />
 <link rel="canonical" href="https://majidershadi.github.io/articles/sc4s-production-guide/" />
 <link rel="stylesheet" href="/assets/site.css" />
 <link rel="alternate" type="application/rss+xml" title="Majid Ershadi Articles" href="/articles/feed.xml" />
 <meta property="og:type" content="article" />
-<meta property="og:title" content="SC4S in Production: What Broke, Why I Changed the Architecture, and How I Fixed It" />
-<meta property="og:description" content="A field guide to Splunk Connect for Syslog built from a real FortiGate and Bitdefender migration: architecture decisions, HEC, metadata, parsing order, SEDCMD, custom parsers, buffering, high-load tuning, macvlan, and troubleshooting." />
+<meta property="og:title" content="SC4S Production Guide: HEC, Parsing &amp; Buffering" />
+<meta property="og:description" content="A FortiGate and Bitdefender migration to Splunk Connect for Syslog: HEC index routing, JSON parsing, disk buffering, and production troubleshooting." />
 <meta property="og:url" content="https://majidershadi.github.io/articles/sc4s-production-guide/" />
 <meta name="twitter:card" content="summary" />
 <meta property="article:published_time" content="2026-08-24" />
 <meta property="article:modified_time" content="2026-09-04" />
 <meta property="article:author" content="Majid Ershadi" />
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "SC4S in Production: What Broke, Why I Changed the Architecture, and How I Fixed It", "description": "A field guide to Splunk Connect for Syslog built from a real FortiGate and Bitdefender migration: architecture decisions, HEC, metadata, parsing order, SEDCMD, custom parsers, buffering, high-load tuning, macvlan, and troubleshooting.", "author": {"@type": "Person", "name": "Majid Ershadi", "url": "https://majidershadi.github.io/"}, "datePublished": "2026-08-24", "dateModified": "2026-09-04", "mainEntityOfPage": "https://majidershadi.github.io/articles/sc4s-production-guide/", "proficiencyLevel": "Beginner to advanced"}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://majidershadi.github.io/"}, {"@type": "ListItem", "position": 2, "name": "Articles", "item": "https://majidershadi.github.io/articles/"}, {"@type": "ListItem", "position": 3, "name": "SC4S in Production: What Broke, Why I Changed the Architecture, and How I Fixed It", "item": "https://majidershadi.github.io/articles/sc4s-production-guide/"}]}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -34,6 +35,7 @@
 <main id="main" class="page-main">
 <div class="article-layout">
 <article class="article">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Home</a><span aria-hidden="true"> / </span><a href="/articles/">Articles</a><span aria-hidden="true"> / </span><span aria-current="page">SC4S Production Guide: HEC, Parsing &amp; Buffering</span></nav>
 <header class="article-header">
 <p class="kicker">Splunk · Syslog · Architecture · Troubleshooting</p>
 <h1 class="article-title">SC4S in Production: What Broke, Why I Changed the Architecture, and How I Fixed It</h1>

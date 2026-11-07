@@ -1,18 +1,24 @@
 <!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>MISPFuse SOC Preview: Intelligence in the Investigation — Majid Ershadi</title>
-<meta name="description" content="A development update on MISP searches, enrichment, snapshot freshness and reviewed contributions in MISPFuse, including current limits." />
+<title>MISPFuse SOC Preview: MISP Investigation in Splunk | Majid Ershadi</title>
+<meta name="description" content="Preview MISPFuse investigation workflows in Splunk: MISP searches, indicator enrichment, snapshot freshness, reviewed contributions, and release limits." />
 <link rel="canonical" href="https://majidershadi.github.io/articles/mispfuse-soc-preview/" />
 <link rel="stylesheet" href="/assets/site.css" />
-<meta property="og:type" content="article" /><meta property="og:title" content="MISPFuse SOC Preview: Intelligence in the Investigation" />
-<meta property="og:description" content="What is changing in MISPFuse, what the lab has verified, and what is not ready to replace yet." />
+<meta property="og:type" content="article" /><meta property="og:title" content="MISPFuse SOC Preview: MISP Investigation in Splunk" />
+<meta property="og:description" content="Preview MISPFuse investigation workflows in Splunk: MISP searches, indicator enrichment, snapshot freshness, reviewed contributions, and release limits." />
 <meta property="og:url" content="https://majidershadi.github.io/articles/mispfuse-soc-preview/" />
 <meta name="twitter:card" content="summary" />
+<meta property="article:published_time" content="2026-10-30" />
+<meta property="article:author" content="Majid Ershadi" />
+<link rel="alternate" type="application/rss+xml" title="Majid Ershadi Articles" href="/articles/feed.xml" />
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "MISPFuse SOC Preview: Intelligence in the Investigation", "description": "Preview MISPFuse investigation workflows in Splunk: MISP searches, indicator enrichment, snapshot freshness, reviewed contributions, and release limits.", "author": {"@type": "Person", "name": "Majid Ershadi", "url": "https://majidershadi.github.io/"}, "datePublished": "2026-10-30", "mainEntityOfPage": "https://majidershadi.github.io/articles/mispfuse-soc-preview/", "inLanguage": "en"}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://majidershadi.github.io/"}, {"@type": "ListItem", "position": 2, "name": "Articles", "item": "https://majidershadi.github.io/articles/"}, {"@type": "ListItem", "position": 3, "name": "MISPFuse SOC Preview: Intelligence in the Investigation", "item": "https://majidershadi.github.io/articles/mispfuse-soc-preview/"}]}</script>
 </head><body>
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="site-shell"><nav class="site-nav" aria-label="Primary"><a class="site-brand" href="/">Majid Ershadi<span class="dot">.</span></a><ul class="site-tabs"><li><a href="/">Profile</a></li><li><a href="/articles/" aria-current="page">Articles</a></li></ul></nav></header>
 <main id="main" class="page-main"><div class="article-layout"><article class="article">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Home</a><span aria-hidden="true"> / </span><a href="/articles/">Articles</a><span aria-hidden="true"> / </span><span aria-current="page">MISPFuse SOC Preview: MISP Investigation in Splunk</span></nav>
 <header class="article-header"><p class="kicker">Development preview · Threat intelligence · SOC workflows</p>
 <h1 class="article-title">MISPFuse SOC Preview: Intelligence in the Investigation</h1>
 <p class="article-deck">Looking up an indicator is easy. Knowing whether the lookup finished, keeping its context, and reviewing what goes back to MISP take more care.</p>

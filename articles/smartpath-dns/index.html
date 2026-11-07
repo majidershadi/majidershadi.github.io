@@ -1,20 +1,21 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>SmartPath DNS: Engineering an Adaptive Local Resolver for Unreliable Networks — Majid Ershadi</title>
-<meta name="description" content="A detailed engineering tour of SmartPath DNS: multi-protocol resolver racing, adaptive priority, persistent caching, GEO selection, bounded concurrency, optional Ghosting, and secure local operations." />
+<title>SmartPath DNS: Adaptive DNS Resolver with DoH &amp; DoT | Majid Ershadi</title>
+<meta name="description" content="How SmartPath DNS races UDP, TCP, DoH, and DoT resolvers, learns upstream performance, and uses persistent caching to handle unreliable networks." />
 <meta name="referrer" content="strict-origin-when-cross-origin" />
 <meta name="theme-color" content="#14161a" />
 <link rel="canonical" href="https://majidershadi.github.io/articles/smartpath-dns/" />
 <link rel="stylesheet" href="/assets/site.css" />
 <link rel="alternate" type="application/rss+xml" title="Majid Ershadi Articles" href="/articles/feed.xml" />
 <meta property="og:type" content="article" />
-<meta property="og:title" content="SmartPath DNS: Engineering an Adaptive Local Resolver for Unreliable Networks — Majid Ershadi" />
-<meta property="og:description" content="Inside the architecture of an adaptive local DNS control plane that learns the best path across UDP, TCP, DoT, and DoH while remaining observable and bounded." />
+<meta property="og:title" content="SmartPath DNS: Adaptive DNS Resolver with DoH &amp; DoT" />
+<meta property="og:description" content="How SmartPath DNS races UDP, TCP, DoH, and DoT resolvers, learns upstream performance, and uses persistent caching to handle unreliable networks." />
 <meta property="og:url" content="https://majidershadi.github.io/articles/smartpath-dns/" />
 <meta name="twitter:card" content="summary" />
 <meta property="article:published_time" content="2026-08-20" />
 <meta property="article:author" content="Majid Ershadi" />
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"SmartPath DNS: Engineering an Adaptive Local Resolver for Unreliable Networks","description":"A detailed engineering tour of SmartPath DNS: multi-protocol resolver racing, adaptive priority, persistent caching, GEO selection, bounded concurrency, optional Ghosting, and secure local operations.","author":{"@type":"Person","name":"Majid Ershadi","url":"https://majidershadi.github.io/"},"datePublished":"2026-08-20","dateModified":"2026-08-20","mainEntityOfPage":"https://majidershadi.github.io/articles/smartpath-dns/","about":["Domain Name System","DNS-over-HTTPS","DNS-over-TLS","Resilient systems","Network security"]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://majidershadi.github.io/"}, {"@type": "ListItem", "position": 2, "name": "Articles", "item": "https://majidershadi.github.io/articles/"}, {"@type": "ListItem", "position": 3, "name": "SmartPath DNS: Engineering an Adaptive Local Resolver for Unreliable Networks", "item": "https://majidershadi.github.io/articles/smartpath-dns/"}]}</script>
 </head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-shell">
 <nav class="site-nav" aria-label="Primary">
   <a class="site-brand" href="/">Majid Ershadi<span class="dot">.</span></a>
@@ -24,7 +25,8 @@
   </ul>
 </nav>
 </header>
-<main id="main" class="page-main"><div class="article-layout"><article class="article"><header class="article-header">
+<main id="main" class="page-main"><div class="article-layout"><article class="article"><nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Home</a><span aria-hidden="true"> / </span><a href="/articles/">Articles</a><span aria-hidden="true"> / </span><span aria-current="page">SmartPath DNS: Adaptive DNS Resolver with DoH &amp; DoT</span></nav>
+<header class="article-header">
 <p class="kicker">DNS Engineering · Resilience · Network Security</p>
 <h1 class="article-title">SmartPath DNS: Engineering an Adaptive Local Resolver for Unreliable Networks</h1>
 <p class="article-deck">How I designed a local DNS control plane that races multiple resolver paths, learns from real traffic, preserves useful answers, and keeps every expensive feature bounded and optional.</p>
